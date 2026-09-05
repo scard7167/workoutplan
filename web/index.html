@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0d">
+<meta name="description" content="Set-by-set strength log prototype - terse input, three-line feedback, volume vs target bands.">
+<title>strength log</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#127947;</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="hrow">
+      <span class="brand">strength log</span>
+      <span class="hstate" id="hstate">-</span>
+    </div>
+    <nav role="tablist">
+      <button role="tab" id="tab-session" aria-controls="p-session" aria-selected="true">session</button>
+      <button role="tab" id="tab-volume"  aria-controls="p-volume"  aria-selected="false">volume</button>
+      <button role="tab" id="tab-history" aria-controls="p-history" aria-selected="false">history</button>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel" id="p-session" role="tabpanel" aria-labelledby="tab-session">
+      <div class="feedback" id="feedback" aria-live="polite"></div>
+      <ul class="sets" id="setlist"></ul>
+      <div class="actions">
+        <button id="btn-end">/end - show the rows</button>
+        <button id="btn-clear">discard session</button>
+      </div>
+      <pre class="csv" id="csvout" hidden></pre>
+      <div class="note">
+        <b>Prototype.</b> Nothing is written to <code>log.csv</code> - the session lives in this
+        browser only. <code>/end</code> prints the rows the CLI would append, to paste in.
+        Baselines and prescriptions read the three seeded sessions in <code>log.example.csv</code>.
+      </div>
+    </section>
+
+    <section class="panel" id="p-volume" role="tabpanel" aria-labelledby="tab-volume" hidden>
+      <div class="vhead">
+        <h2>Hard sets vs target band</h2>
+        <div class="toggle">
+          <button id="w7"  aria-pressed="true">7d</button>
+          <button id="w14" aria-pressed="false">14d</button>
+        </div>
+      </div>
+      <div class="vsub" id="vsub"></div>
+      <div id="meters"></div>
+      <p class="legend">
+        Bar = hard sets credited (prime movers only, RIR &le; 3). Grey block = <b>min to max</b> band,
+        white tick = <b>target</b>. Rolling window back from the last logged date, not a calendar week.<br>
+        Lower-body bands are deliberately low and their flags are informational: the cycling and
+        running load is not in this log.
+      </p>
+      <div class="note">
+        <b>Not built yet:</b> e1RM trend, strength index, volume-load bridge, stall detection,
+        balance ratios. They are stubs in <code>analyze.py</code> carrying their spec - this
+        prototype will not fake them.
+      </div>
+    </section>
+
+    <section class="panel" id="p-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <div class="composer" id="composer">
+    <input id="input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           placeholder="bench 80x8 @2" aria-label="log a set">
+    <button id="btn-log">log</button>
+    <button id="btn-undo" class="ghost" aria-label="undo last set">undo</button>
+  </div>
+</div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

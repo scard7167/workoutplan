@@ -22,3 +22,18 @@ python3 analyze.py volume   --log log.example.csv --window 7
 ```
 
 Requires Python 3.10+ and pyyaml.
+
+## web/ - prototype
+
+A phone-first prototype of the logging loop: terse input, the 3-line feedback contract,
+volume vs the target bands. Static HTML/CSS/JS, no build step, no backend.
+
+`web/data.js` is GENERATED from `exercises.yaml`, `config.yaml` and `log.example.csv` -
+the prototype never restates a rule. After editing any of those three:
+
+```
+python3 web/build_data.py
+python3 -m http.server 8000 -d web    # then open http://localhost:8000
+```
+
+The prototype does not write `log.csv`. `/end` prints the rows the CLI would append.
