@@ -1,0 +1,155 @@
+# Exercise library. Canonical names are the keys - log.csv never contains free text.
+#
+# muscles:    PRIME MOVERS ONLY. A set counts 1 hard set to each muscle listed here
+#             and nothing to anything else. Indirect stimulus is real but deliberately
+#             uncounted - the target bands in config.yaml are set low to compensate.
+#             Two entries only where the lift is genuinely co-primary.
+# increment:  smallest load jump available for this lift, in kg. For dumbbells this is
+#             the per-dumbbell jump (log weight_kg per dumbbell, not the pair).
+# rep_range:  [floor, ceiling] for double progression.
+# bodyweight: true  -> weight_kg is ADDED load only. Bodyweight-only sets are logged
+#             as 0. e1RM is not meaningful for these sets and analytics exclude them
+#             from e1RM trends; progress on them is tracked by reps until load is added.
+#
+# Adding a lift here requires asking first. See CLAUDE.md, hard rules.
+
+bench_press:
+  aliases: [bench, bp, bb bench, flat bench]
+  muscles: [chest]
+  increment: 2.5
+  rep_range: [6, 10]
+
+incline_db_press:
+  aliases: [incline db, idb, incline press, incline db press, incline]
+  muscles: [chest]
+  increment: 2
+  rep_range: [8, 12]
+
+cable_fly:
+  aliases: [fly, flies, flye, cable fly, pec fly, pec deck]
+  muscles: [chest]
+  increment: 2.5
+  rep_range: [10, 15]
+
+dip:
+  aliases: [dip, dips, weighted dip]
+  muscles: [chest, triceps]
+  increment: 2.5
+  rep_range: [6, 10]
+  bodyweight: true
+
+overhead_press:
+  aliases: [ohp, opress, standing press, mil press, military press]
+  muscles: [front_delts]
+  increment: 2.5
+  rep_range: [5, 8]
+
+db_shoulder_press:
+  aliases: [db press, shoulder press, db shoulder press, seated db press]
+  muscles: [front_delts]
+  increment: 2
+  rep_range: [8, 12]
+
+lateral_raise:
+  aliases: [lat raise, lr, side raise, db lateral, lateral]
+  muscles: [side_delts]
+  increment: 2
+  rep_range: [12, 18]
+
+cable_lateral_raise:
+  aliases: [cable lr, cable lat raise, cable lateral, cable side raise]
+  muscles: [side_delts]
+  increment: 2.5
+  rep_range: [12, 18]
+
+reverse_fly:
+  aliases: [rear fly, reverse fly, rear delt fly, rev fly, reverse pec deck]
+  muscles: [rear_delts]
+  increment: 2
+  rep_range: [12, 18]
+
+face_pull:
+  aliases: [face pull, fp, facepull]
+  muscles: [rear_delts]
+  increment: 2.5
+  rep_range: [12, 20]
+
+pullup:
+  aliases: [pullup, pull up, pu, chin, chinup, chin up]
+  muscles: [lats]
+  increment: 2.5
+  rep_range: [5, 10]
+  bodyweight: true
+
+lat_pulldown:
+  aliases: [pulldown, lpd, lat pulldown, pull down]
+  muscles: [lats]
+  increment: 2.5
+  rep_range: [8, 12]
+
+barbell_row:
+  aliases: [row, bb row, barbell row, pendlay]
+  muscles: [lats, upper_back]
+  increment: 2.5
+  rep_range: [6, 10]
+
+chest_supported_row:
+  aliases: [csr, chest supported row, seal row, machine row, cable row]
+  muscles: [upper_back, lats]
+  increment: 2.5
+  rep_range: [8, 12]
+
+barbell_curl:
+  aliases: [curl, bb curl, barbell curl, ez curl]
+  muscles: [biceps]
+  increment: 2.5
+  rep_range: [8, 12]
+
+incline_db_curl:
+  aliases: [incline curl, idc, incline db curl, seated curl]
+  muscles: [biceps]
+  increment: 2
+  rep_range: [10, 14]
+
+triceps_pushdown:
+  aliases: [pushdown, pd, tri pushdown, rope pushdown, triceps pushdown]
+  muscles: [triceps]
+  increment: 2.5
+  rep_range: [10, 15]
+
+overhead_triceps_extension:
+  aliases: [oh ext, overhead ext, ohe, overhead extension, skull, skullcrusher]
+  muscles: [triceps]
+  increment: 2.5
+  rep_range: [10, 15]
+
+back_squat:
+  aliases: [squat, sq, back squat, bb squat]
+  muscles: [quads, glutes]
+  increment: 5
+  rep_range: [5, 8]
+
+romanian_deadlift:
+  aliases: [rdl, romanian, romanian deadlift, stiff leg]
+  muscles: [hamstrings, glutes]
+  increment: 5
+  rep_range: [6, 10]
+
+standing_calf_raise:
+  aliases: [calf, calf raise, calves, standing calf]
+  muscles: [calves]
+  increment: 5
+  rep_range: [10, 15]
+
+hanging_leg_raise:
+  aliases: [leg raise, hlr, hanging leg raise, knee raise]
+  muscles: [core]
+  increment: 2.5
+  rep_range: [10, 15]
+  bodyweight: true
+
+cable_crunch:
+  aliases: [cable crunch, crunch, kneeling crunch]
+  muscles: [core]
+  increment: 2.5
+  rep_range: [10, 15]

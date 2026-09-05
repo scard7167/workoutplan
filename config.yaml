@@ -1,0 +1,58 @@
+# Targets, progression rule, thresholds. Single source of truth for prescriptions.
+
+athlete:
+  sessions_per_week: 3
+  # Cycling/running 30-50 km/week is NOT logged here. Lower-body bands below are set
+  # deliberately low because of it. See CLAUDE.md hard rules.
+
+# Weekly DIRECT hard-set targets per muscle, rolling 7 days.
+# These are direct-work targets and are LOWER than the volume literature quotes,
+# because indirect stimulus is real but uncounted here: triceps and front delts get
+# plenty from pressing, biceps from rowing and pulldowns, glutes from squats and
+# cycling. Do not raise them to match a paper that counts indirect work.
+volume_targets:
+  chest:        {min: 8,  target: 10, max: 13}
+  lats:         {min: 8,  target: 10, max: 13}
+  upper_back:   {min: 6,  target: 8,  max: 11}
+  front_delts:  {min: 3,  target: 4,  max: 7}
+  side_delts:   {min: 8,  target: 10, max: 14}
+  rear_delts:   {min: 5,  target: 7,  max: 10}
+  biceps:       {min: 4,  target: 6,  max: 9}
+  triceps:      {min: 4,  target: 6,  max: 9}
+  quads:        {min: 3,  target: 4,  max: 6}
+  hamstrings:   {min: 3,  target: 4,  max: 6}
+  glutes:       {min: 2,  target: 3,  max: 5}
+  calves:       {min: 2,  target: 3,  max: 5}
+  core:         {min: 3,  target: 4,  max: 6}
+
+progression:
+  # Double progression. This is the ONLY source of load prescriptions.
+  #   1. All working sets of the exercise hit rep_range ceiling with RIR <= rir_ceiling
+  #      -> next session add one increment, reps reset to rep_range floor.
+  #   2. Any working set falls below rep_range floor at RIR 0
+  #      -> deload that exercise by deload_pct, rounded DOWN to the increment.
+  #      Applies immediately, from the next set onward.
+  #   3. Otherwise hold the load and add reps.
+  rule: double_progression
+  rir_ceiling: 2          # max RIR on every set to trigger a load increase
+  deload_pct: 0.10        # deload size when rule 2 fires
+  deload_rounding: down   # round the deloaded load down to the exercise increment
+
+metrics:
+  # e1RM = weight_kg * (1 + (reps + rir) / 30). Blank RIR is treated as 1.
+  blank_rir_as: 1
+  # Hard set = any working set. If RIR is present, only RIR <= hard_set_rir counts.
+  hard_set_rir: 3
+  # Rolling day windows, not calendar weeks.
+  windows: [7, 14]
+
+analysis:
+  baseline_weeks: 4       # strength_index baseline = first 4 weeks of an exercise = 100
+  trend_weeks: 8          # least-squares e1RM slope window
+  stall_sessions: 3       # no e1RM PR in this many sessions -> stall flag
+
+balance_bands:
+  # Set-count ratios over the rolling 7-day window.
+  push_pull:      {min: 0.7, max: 1.3}   # chest+front_delts+triceps : lats+upper_back+biceps
+  quad_hamstring: {min: 0.7, max: 1.5}   # quads : hamstrings
+  upper_lower:    {min: 2.5, max: 6.0}   # upper-body sets : lower-body sets (cycling covers legs)
