@@ -16,10 +16,10 @@ body = html.split("<body>", 1)[1].split("</body>", 1)[0]
 body = body.replace('<script type="module" src="app.js"></script>', "").strip()
 
 app = read("app.js")
-app = re.sub(r'^import \{[^}]*\} from "\./data\.js";\n', "", app, flags=re.M)
+app = re.sub(r'^import \{.*?\}\s*from "\./data\.js";\n', "", app, flags=re.M | re.S)
 data = re.sub(r"^export const ", "const ", read("data.js"), flags=re.M)
 
-out = f"""<title>Set-by-Set Strength Log</title>
+out = f"""<title>Strength Log</title>
 <style>
 {read("styles.css")}</style>
 

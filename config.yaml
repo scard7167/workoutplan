@@ -1,41 +1,54 @@
 # Targets, progression rule, thresholds. Single source of truth for prescriptions.
 
 athlete:
-  sessions_per_week: 3
-  # Cycling/running 30-50 km/week is NOT logged here. Lower-body bands below are set
-  # deliberately low because of it. See CLAUDE.md hard rules.
+  sessions_per_week: 7
+  # 7 short strength sessions on top of 30-50 km/week of running and cycling that this
+  # log never sees. Recovery is the binding constraint, not gym time, so the routine
+  # runs 10-12 working sets per session rather than 20+. See CLAUDE.md hard rules.
 
 # Weekly DIRECT hard-set targets per muscle, rolling 7 days.
-# These are direct-work targets and are LOWER than the volume literature quotes,
+# These are DERIVED FROM routine.yaml: the target is what the routine delivers when it
+# is executed as written, with min/max as the tolerance either side. Change the routine
+# and these move with it - never the other way round.
+#
+# They are direct-work targets and sit BELOW the numbers the volume literature quotes,
 # because indirect stimulus is real but uncounted here: triceps and front delts get
-# plenty from pressing, biceps from rowing and pulldowns, glutes from squats and
-# cycling. Do not raise them to match a paper that counts indirect work.
+# plenty from pressing, biceps from rowing and pulldowns, glutes from cycling.
+#
+# quads and calves are UNCOVERED BY DESIGN - no routine lift trains them directly. The
+# cycling and running do, and that load is not in this log. Their band is 0 and the
+# volume report labels them UNCOVERED rather than RED. Do not "fix" this by adding leg
+# work on the basis of this log.
 volume_targets:
-  chest:        {min: 8,  target: 10, max: 13}
-  lats:         {min: 8,  target: 10, max: 13}
+  chest:        {min: 7,  target: 9,  max: 12}
+  lats:         {min: 13, target: 17, max: 21}
   upper_back:   {min: 6,  target: 8,  max: 11}
-  front_delts:  {min: 3,  target: 4,  max: 7}
-  side_delts:   {min: 8,  target: 10, max: 14}
-  rear_delts:   {min: 5,  target: 7,  max: 10}
-  biceps:       {min: 4,  target: 6,  max: 9}
-  triceps:      {min: 4,  target: 6,  max: 9}
-  quads:        {min: 3,  target: 4,  max: 6}
-  hamstrings:   {min: 3,  target: 4,  max: 6}
-  glutes:       {min: 2,  target: 3,  max: 5}
-  calves:       {min: 2,  target: 3,  max: 5}
-  core:         {min: 3,  target: 4,  max: 6}
+  front_delts:  {min: 4,  target: 6,  max: 8}
+  side_delts:   {min: 10, target: 12, max: 16}
+  rear_delts:   {min: 6,  target: 8,  max: 11}
+  biceps:       {min: 5,  target: 6,  max: 9}
+  triceps:      {min: 5,  target: 6,  max: 9}
+  quads:        {min: 0,  target: 0,  max: 6}
+  hamstrings:   {min: 4,  target: 6,  max: 8}
+  glutes:       {min: 4,  target: 6,  max: 8}
+  calves:       {min: 0,  target: 0,  max: 5}
+  core:         {min: 4,  target: 5,  max: 8}
+
+# Muscles no routine lift trains directly. Reported as UNCOVERED, never as a deficit.
+uncovered_by_design: [quads, calves]
 
 progression:
   # Double progression. This is the ONLY source of load prescriptions.
-  #   1. All working sets of the exercise hit rep_range ceiling with RIR <= rir_ceiling
-  #      -> next session add one increment, reps reset to rep_range floor.
-  #   2. Any working set falls below rep_range floor at RIR 0
+  #   1. Any working set falls below rep_range floor at RIR 0
   #      -> deload that exercise by deload_pct, rounded DOWN to the increment.
-  #      Applies immediately, from the next set onward.
+  #      Applies immediately, from the next set onward. Checked first.
+  #   2. Every working set of the exercise in the last session hit rep_range ceiling
+  #      with RIR <= rir_ceiling -> add one increment, reps reset to rep_range floor.
+  #      A blank RIR does not satisfy this.
   #   3. Otherwise hold the load and add reps.
   rule: double_progression
   rir_ceiling: 2          # max RIR on every set to trigger a load increase
-  deload_pct: 0.10        # deload size when rule 2 fires
+  deload_pct: 0.10        # deload size when rule 1 fires
   deload_rounding: down   # round the deloaded load down to the exercise increment
 
 metrics:
@@ -49,10 +62,18 @@ metrics:
 analysis:
   baseline_weeks: 4       # strength_index baseline = first 4 weeks of an exercise = 100
   trend_weeks: 8          # least-squares e1RM slope window
-  stall_sessions: 3       # no e1RM PR in this many sessions -> stall flag
+  stall_sessions: 3       # minimum sessions before an exercise can be judged at all
+  stall_trend_weeks: 4    # slope window for stall detection - shorter than trend_weeks,
+                          # so a lift that rose for 8w then went flat still gets caught
+  stall_days: 21          # no e1RM PR in this many DAYS -> stall flag. Session count is
+                          # the wrong unit at 3-4 sessions/week: a flat e1RM between load
+                          # increments is normal double progression, not a stall.
+  min_trend_points: 4     # fewer session points than this -> no slope, say so
+  noisy_r2: 0.3           # a slope below this r2 is reported as noisy, not as a trend
+  adherence_window: 14    # days used for planned-vs-logged adherence
 
 balance_bands:
   # Set-count ratios over the rolling 7-day window.
-  push_pull:      {min: 0.7, max: 1.3}   # chest+front_delts+triceps : lats+upper_back+biceps
-  quad_hamstring: {min: 0.7, max: 1.5}   # quads : hamstrings
-  upper_lower:    {min: 2.5, max: 6.0}   # upper-body sets : lower-body sets (cycling covers legs)
+  push_pull:      {min: 0.5, max: 1.1}   # chest+front_delts+triceps : lats+upper_back+biceps
+  quad_hamstring: {min: 0.0, max: 1.5}   # quads : hamstrings - quads uncovered by design
+  upper_lower:    {min: 4.0, max: 14.0}  # upper : lower sets - runs high BY DESIGN

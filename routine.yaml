@@ -1,0 +1,81 @@
+# The plan. 10 lifts, rotated across 7 short sessions a week.
+#
+# This is the counterpart to log.csv: the routine says what SHOULD happen, the log
+# says what did. Every analytic that talks about adherence compares the two.
+#
+# Design constraints:
+#   - 7 sessions/week alongside 30-50 km of running and cycling. Recovery, not time,
+#     is the binding constraint, so sessions are SHORT (10-12 working sets, ~35 min)
+#     and each lift is trained 2-3x/week rather than hammered once.
+#   - 10 lifts, not 20. A small fixed set is what makes the numbers comparable
+#     week over week - every swap resets a baseline.
+#   - quads and calves are deliberately NOT in the routine. The cycling and running
+#     load them and this log never sees it. Their bands in config.yaml are set to 0
+#     and the volume report marks them UNCOVERED, not RED.
+#
+# Edit this file (or the routine screen in the web app) to make it yours.
+# `sets` is the TARGET working sets for that lift on that day. Loads never live here -
+# they come from the progression rule, always.
+
+lifts:
+  - bench_press
+  - pullup
+  - chest_supported_row
+  - overhead_press
+  - lateral_raise
+  - face_pull
+  - barbell_curl
+  - triceps_pushdown
+  - romanian_deadlift
+  - hanging_leg_raise
+
+week:
+  mon:
+    name: press + row
+    plan:
+      - {exercise: bench_press, sets: 3}
+      - {exercise: chest_supported_row, sets: 3}
+      - {exercise: lateral_raise, sets: 3}
+      - {exercise: triceps_pushdown, sets: 2}
+  tue:
+    name: pull + overhead
+    plan:
+      - {exercise: pullup, sets: 3}
+      - {exercise: overhead_press, sets: 3}
+      - {exercise: face_pull, sets: 3}
+      - {exercise: barbell_curl, sets: 2}
+  wed:
+    name: hinge + core
+    plan:
+      - {exercise: romanian_deadlift, sets: 3}
+      - {exercise: hanging_leg_raise, sets: 3}
+      - {exercise: lateral_raise, sets: 3}
+      - {exercise: chest_supported_row, sets: 2}
+  thu:
+    name: heavy pair
+    plan:
+      - {exercise: bench_press, sets: 3}
+      - {exercise: pullup, sets: 3}
+      - {exercise: triceps_pushdown, sets: 2}
+      - {exercise: barbell_curl, sets: 2}
+  fri:
+    name: shoulders
+    plan:
+      - {exercise: overhead_press, sets: 3}
+      - {exercise: lateral_raise, sets: 3}
+      - {exercise: face_pull, sets: 3}
+      - {exercise: hanging_leg_raise, sets: 2}
+  sat:
+    name: row + hinge
+    plan:
+      - {exercise: chest_supported_row, sets: 3}
+      - {exercise: romanian_deadlift, sets: 3}
+      - {exercise: barbell_curl, sets: 2}
+      - {exercise: triceps_pushdown, sets: 2}
+  sun:
+    name: full
+    plan:
+      - {exercise: bench_press, sets: 3}
+      - {exercise: pullup, sets: 3}
+      - {exercise: lateral_raise, sets: 3}
+      - {exercise: face_pull, sets: 2}

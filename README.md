@@ -25,15 +25,24 @@ Requires Python 3.10+ and pyyaml.
 
 ## web/ - prototype
 
-A phone-first prototype of the logging loop: terse input, the 3-line feedback contract,
-volume vs the target bands. Static HTML/CSS/JS, no build step, no backend.
+A phone-first prototype: Today (the plan, prescribed loads, terse logging, the 3-line
+feedback contract), Trends (e1RM per lift, strength index, the volume-load bridge,
+stalls, balance, adherence), Plan (edit the weekly routine, export routine.yaml).
+Static HTML/CSS/JS, no build step, no backend.
 
-`web/data.js` is GENERATED from `exercises.yaml`, `config.yaml` and `log.example.csv` -
-the prototype never restates a rule. After editing any of those three:
+`web/data.js` embeds the exercise library, the routine, the bands and a full run of
+`analyze.py`'s analytics (`web/analytics.json`) - generated, never hand-edited. Every
+deep number in Trends is computed once by `analyze.py` and rendered as-is; nothing is
+recomputed in JavaScript. After editing `exercises.yaml`, `config.yaml`, `routine.yaml`
+or `log.example.csv`:
 
 ```
 python3 web/build_data.py
 python3 -m http.server 8000 -d web    # then open http://localhost:8000
 ```
 
-The prototype does not write `log.csv`. `/end` prints the rows the CLI would append.
+`web/build_artifact.py` bundles everything into one file (`web/artifact.html`, not
+tracked) for hosts that can't fetch sibling files, such as a Claude Artifact.
+
+The prototype does not write `log.csv`. Finish prints the rows the CLI would append.
+Session state and any plan edits live in `localStorage`, per browser.

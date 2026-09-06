@@ -2,3 +2,4 @@ current_session.md
 __pycache__/
 *.pyc
 web/artifact.html
+web/analytics.json
