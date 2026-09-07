@@ -20,15 +20,14 @@ import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE, ANALYTICS, 
 const MUSCLES = ["chest","lats","upper_back","front_delts","side_delts","rear_delts",
                  "biceps","triceps","quads","hamstrings","glutes","calves","core"];
 const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
-const STORE_SESSION = "strengthlog.session.v2";
-const STORE_ROUTINE = "strengthlog.routine.v1";
+const STORE_SESSION = "strengthlog.session.v3";
+const STORE_ROUTINE = "strengthlog.routine.v2";
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const state = {
   date: new Date().toISOString().slice(0, 10),
   sets: [],
-  extraSlots: {},    // {exercise: N} - off-plan sets added this session, past the plan's count
   sticky: null,
   window: 7,
   lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
@@ -36,6 +35,14 @@ const state = {
 };
 
 const routine = () => state.routine || ROUTINE;
+// Cheap stable hash (djb2) of the shipped routine, used to tell whether a stored local
+// edit was made against the routine.yaml that is currently deployed.
+function routineFingerprint(r) {
+  const str = JSON.stringify(r);
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h);
+}
 const todayKey = () => DAYS[(new Date().getDay() + 6) % 7];
 const label = (e) => e.replace(/_/g, " ");
 
@@ -136,17 +143,18 @@ function sparkline(values, w = 120, h = 26) {
 
 // ------------------------------------------------------------- TODAY view
 // Weight-only logging. Each exercise gets exactly `p.sets` input boxes - the count the
-// Plan tab set, nothing typed here changes it - plus one more for every tap of "+" this
-// session (state.extraSlots, session-local, never written back to routine.yaml: an
-// off-plan set today isn't a permanent change to the plan). A slot's position IS its
-// set_no; clearing one un-logs that set without renumbering its neighbours.
+// Plan tab set, and nothing in Today can change it. A slot's position IS its set_no;
+// clearing one un-logs that set without renumbering its neighbours.
+//
+// The Math.max is a data guard, not a feature: it only fires if a stored session holds
+// more logged sets than the plan now allows (the plan was cut after they were logged),
+// and exists so logged data is never hidden. Nothing here can create that state.
 function loggedFor(exercise) {
   return state.sets.filter(s => s.exercise === exercise).length;
 }
 
 function slotCount(p) {
-  const extra = state.extraSlots[p.exercise] || 0;
-  return Math.max(p.sets + extra, loggedFor(p.exercise));
+  return Math.max(p.sets, loggedFor(p.exercise));
 }
 
 function renderToday() {
@@ -197,19 +205,25 @@ function renderToday() {
         <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
       </div>`;
     }).join("");
+    // "last week" is the honest label for a lift trained once a week, which is most of
+    // them on a 7-day rotation - but a lift scheduled twice a week was last done 3 or 4
+    // days ago, and calling that "last week" would be wrong. Say the actual gap instead.
+    const daysBack = prior
+      ? Math.round((Date.parse(state.date) - Date.parse(prior[0].date)) / 864e5)
+      : null;
+    const prevLabel = daysBack === null ? "last"
+      : daysBack >= 6 && daysBack <= 8 ? "last week" : `${daysBack}d ago`;
     const legend = `<div class="slot slotlab" aria-hidden="true"
         title="${prior ? "last session " + prior[0].date : "no previous session"}">
       <span class="slotn">set</span><span class="labgap"></span>
-      <span class="slotprev">last</span></div>`;
+      <span class="slotprev">${prevLabel}</span></div>`;
     return `<li class="${cls}" data-ex="${p.exercise}">
       <div class="rowtop">
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
         <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${rx.target_reps}</span>
       </div>
       <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}</span>
-      <div class="slots">${legend}${slots}
-        <button class="addslot" data-role="add" data-ex="${p.exercise}" aria-label="add a set">+</button>
-      </div></li>`;
+      <div class="slots">${legend}${slots}</div></li>`;
   }).join("");
 
   for (const li of $("today-plan").querySelectorAll("li")) {
@@ -227,10 +241,6 @@ function renderToday() {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
       };
     }
-    li.querySelector('[data-role="add"]').onclick = () => {
-      state.extraSlots[ex] = (state.extraSlots[ex] || 0) + 1;
-      saveSession(); renderToday();
-    };
     for (const input of li.querySelectorAll(".slotw")) {
       // No focus-preview here: the row's "rx" text already shows the prescribed
       // weight/reps at a glance, and firing showPrescription() on focus would
@@ -541,12 +551,20 @@ function renderTrends() {
 function loadRoutine() {
   try {
     const raw = localStorage.getItem(STORE_ROUTINE);
-    if (raw) state.routine = JSON.parse(raw);
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    // A local edit is only valid against the routine.yaml it was made from. If a new
+    // one has shipped since, the stored copy is dropped and the file wins - otherwise
+    // any device that ever opened the Plan tab would be pinned to that old snapshot
+    // forever and would silently never see a deployed routine change again.
+    if (d && d.base === routineFingerprint(ROUTINE) && d.routine) state.routine = d.routine;
   } catch { /* ignore */ }
 }
 function saveRoutine() {
-  try { localStorage.setItem(STORE_ROUTINE, JSON.stringify(state.routine)); }
-  catch { /* private mode */ }
+  try {
+    localStorage.setItem(STORE_ROUTINE, JSON.stringify(
+      { base: routineFingerprint(ROUTINE), routine: state.routine }));
+  } catch { /* private mode */ }
 }
 function ensureEditable() {
   if (!state.routine) state.routine = JSON.parse(JSON.stringify(ROUTINE));
@@ -702,7 +720,7 @@ function showFeedback(html) { $("feedback").innerHTML = html; }
 
 function saveSession() {
   try { localStorage.setItem(STORE_SESSION, JSON.stringify(
-    { date: state.date, sets: state.sets, sticky: state.sticky, extraSlots: state.extraSlots })); }
+    { date: state.date, sets: state.sets, sticky: state.sticky })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -712,7 +730,6 @@ function loadSession() {
     const d = JSON.parse(raw);
     if (d && d.date === state.date && Array.isArray(d.sets)) {
       state.sets = d.sets; state.sticky = d.sticky || null;
-      state.extraSlots = d.extraSlots && typeof d.extraSlots === "object" ? d.extraSlots : {};
     }
   } catch { /* ignore */ }
 }
@@ -729,7 +746,7 @@ for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selec
 $("btn-end").onclick = showCsv;
 $("btn-clear").onclick = () => {
   if (!state.sets.length || confirm("Discard the open session? Nothing has been written to log.csv.")) {
-    state.sets = []; state.sticky = null; state.extraSlots = {}; $("csvout").hidden = true;
+    state.sets = []; state.sticky = null; $("csvout").hidden = true;
     renderToday(); showFeedback(`<span class="hint">session discarded</span>`);
     saveSession();
   }

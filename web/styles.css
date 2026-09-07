@@ -110,8 +110,8 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .slotw:focus { border-color: var(--accent); outline: none; }
 .slot.filled .slotw { border-color: var(--accent-d); background: rgba(127,209,232,.08); }
 .slotprev { font: 400 11px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.slotlab { opacity: .8; }
-.slotlab .slotn, .slotlab .slotprev { letter-spacing: .04em; }
+.slotlab { opacity: .8; align-items: flex-start; }
+.slotlab .slotn, .slotlab .slotprev { letter-spacing: .04em; white-space: nowrap; }
 .labgap { height: 40px; }   /* matches .slotw, so the "last" row lines up with the values */
 .addslot {
   width: 38px; height: 38px; border-radius: 8px; border: 1px dashed var(--line-2);
