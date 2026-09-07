@@ -20,7 +20,7 @@ athlete:
 # volume report labels them UNCOVERED rather than RED. Do not "fix" this by adding leg
 # work on the basis of this log.
 volume_targets:
-  chest:        {min: 10, target: 12, max: 16}
+  chest:        {min: 13, target: 15, max: 19}
   lats:         {min: 10, target: 14, max: 18}
   upper_back:   {min: 3,  target: 5,  max: 8}
   front_delts:  {min: 4,  target: 6,  max: 8}

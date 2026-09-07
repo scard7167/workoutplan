@@ -1,4 +1,4 @@
-# The plan. 10 lifts, rotated across 7 short sessions a week.
+# The plan. 16 lifts, rotated across 7 short sessions a week.
 #
 # This is the counterpart to log.csv: the routine says what SHOULD happen, the log
 # says what did. Every analytic that talks about adherence compares the two.
@@ -7,6 +7,10 @@
 #   - 7 sessions/week alongside 30-50 km of running and cycling. Recovery, not time,
 #     is the binding constraint, so sessions are SHORT (10-12 working sets, ~35 min)
 #     and each lift is trained 2-3x/week rather than hammered once.
+#     MONDAY IS THE EXCEPTION at 16 sets: it carries three separate gym80 chest presses
+#     (3023N incline, 3121 standing, 3016 seated). Three presses in one plane is a lot
+#     of the same pattern, and it is what pushed the chest band from 12 to 15 sets/week.
+#     Dropping one of them puts Monday back inside the constraint.
 #   - 10 lifts, not 20. A small fixed set is what makes the numbers comparable
 #     week over week - every swap resets a baseline.
 #   - quads and calves are deliberately NOT in the routine. The cycling and running
@@ -30,6 +34,7 @@ lifts:
   - hanging_leg_raise
   - incline_chest_press_machine
   - standing_chest_press_machine
+  - seated_chest_press_machine
   - lateral_raise_machine
   - dip_machine
   - overhead_triceps_machine
@@ -40,6 +45,7 @@ week:
     plan:
       - {exercise: incline_chest_press_machine, sets: 3}
       - {exercise: standing_chest_press_machine, sets: 3}
+      - {exercise: seated_chest_press_machine, sets: 3}
       - {exercise: lateral_raise_machine, sets: 3}
       - {exercise: dip_machine, sets: 2}
       - {exercise: overhead_triceps_machine, sets: 2}

@@ -1186,7 +1186,8 @@ async function addPhotos(files) {
       const { blob, url } = await shrinkImage(f);
       state.photos.push({ id: `p${Date.now()}${state.photos.length}`, blob, url, name: f.name });
     } catch (e) {
-      showScanNote(`could not read ${f.name}: ${e.message}`, true);
+      showScanNote(`could not read ${f.name} (${f.type || "unknown type"}): ${e.message}. ` +
+        `If it is a HEIC photo, share it as JPEG or take a screenshot of it.`, true);
     }
   }
   state.proposals = null;
@@ -1380,8 +1381,14 @@ function renderScan() {
   }
 }
 
-$("btn-pick").onclick = () => $("photos").click();
+// The picker is opened by a real <label for>, not by JS calling .click() on a hidden
+// input: on iOS a display:none file input often does not open at all from a synthetic
+// click, which is exactly the "cannot submit the image" this hit. The label needs no
+// script, so keyboard activation is all that is left to wire.
 $("photos").onchange = (e) => { addPhotos(e.target.files); e.target.value = ""; };
+$("btn-pick").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("photos").click(); }
+});
 for (const ev of ["dragenter", "dragover"])
   $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); });
 for (const ev of ["dragleave", "drop"])
@@ -1399,7 +1406,10 @@ $("btn-identify").onclick = identifyPhotos;
     if (!lim?.images) return;
     SAMPLE = s;
     SAMPLE_IMAGES = lim.images;
-    $("photos").accept = lim.images.mediaTypes.join(",");
+    // Deliberately NOT narrowed to lim.images.mediaTypes. An iPhone's camera roll is
+    // HEIC, which is not on that list, so filtering by it greys out the very photos
+    // this feature is for. Everything is re-encoded to JPEG by shrinkImage() before it
+    // is sent, so what the input accepts and what Claude accepts are different things.
     renderScan();
   } catch { /* no viewer, no capability - the fallback copy is already rendered */ }
 })();

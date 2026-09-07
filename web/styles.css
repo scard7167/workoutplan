@@ -355,10 +355,14 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
   display: flex; flex-wrap: wrap; gap: 9px; align-items: center;
 }
 .drop.over { border-color: var(--accent); background: rgba(127,209,232,.05); }
-.drop button {
+.drop button, .pickbtn {
   background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
   border-radius: 8px; padding: 9px 13px; font: 500 13px var(--sans); cursor: pointer;
+  display: inline-block;
 }
+/* Off-screen, but NOT display:none and NOT [hidden]: a file input removed from layout
+   is unreliable on iOS even behind a label. */
+.filein { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .drop button.primary { background: var(--accent); border-color: var(--accent); color: #0B1417; }
 .drop button[hidden] { display: none; }
 .dropnote { flex-basis: 100%; margin: 0; font: 400 10.5px/1.55 var(--sans); color: var(--muted); }

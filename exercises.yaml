@@ -183,6 +183,18 @@ standing_chest_press_machine:
   rep_range: [8, 12]
   image: images/standing_chest_press_machine.jpg
 
+seated_chest_press_machine:
+  # gym80 Sygnum 3016 "Brustpresse" - seated plate-stack chest press. A THIRD chest
+  # machine alongside 3023N (incline) and 3121 (standing): same muscle, same total-stack
+  # unit, but a distinct machine, so it gets its own baseline rather than an alias.
+  aliases: [gym80 3016, brustpresse, sygnum 3016, seated chest press, chest press
+            machine, seated chest press machine]
+  muscles: [chest]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine. NOT legible on the
+                 # product page - this is the assumed commercial default, not a reading.
+  rep_range: [8, 12]
+  image: images/seated_chest_press_machine.jpg
+
 lateral_raise_machine:
   # gym80 Sygnum 3050 "Seithebemaschine" - plate-stack lateral raise, independent arms.
   # Not the same unit as lateral_raise (DB) or cable_lateral_raise.
