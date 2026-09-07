@@ -184,9 +184,11 @@ function renderToday() {
       : "";
     const placeholder = fmtW(rx.weight_kg, p.exercise);
 
-    // Headline weight follows what you are ACTUALLY lifting today once anything is
-    // logged - the heaviest set entered - and falls back to the prescription before
-    // that. The rep target beside it never moves: it comes from the plan.
+    // Headline reads "weight x sets": the weight follows what you are ACTUALLY lifting
+    // today once anything is logged - the heaviest set entered - and falls back to the
+    // prescription before that. The number beside it is the PLANNED set count, matching
+    // the boxes below and the Plan tab; it is not the rep target, which sits in the
+    // muted line under it since reps are never entered here anyway.
     const today = state.sets.filter(s => s.exercise === p.exercise);
     const top = today.length ? Math.max(...today.map(s => s.weight_kg)) : null;
     const headline = top === null ? placeholder : fmtW(top, p.exercise);
@@ -220,9 +222,10 @@ function renderToday() {
     return `<li class="${cls}" data-ex="${p.exercise}">
       <div class="rowtop">
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${rx.target_reps}</span>
+        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
       </div>
-      <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}</span>
+      <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}
+        &middot; ${rx.target_reps} reps</span>
       <div class="slots">${legend}${slots}</div></li>`;
   }).join("");
 
