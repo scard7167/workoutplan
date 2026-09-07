@@ -520,6 +520,11 @@ function ensureEditable() {
 }
 
 function renderPlan() {
+  // Today's rows (prescribed loads, set counts) are derived from this same routine
+  // state - every routine edit has to refresh both, or Today goes stale the moment
+  // you swap a lift, change its sets, or reorder, without needing a tab switch to
+  // paper over it.
+  renderToday();
   const r = routine();
   const planned = DAYS.reduce((a, d) => a + r.week[d].plan.reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
@@ -532,6 +537,7 @@ function renderPlan() {
     const n = day.plan.reduce((a, p) => a + p.sets, 0);
     const rows = day.plan.map((p, i) => `
       <div class="dayrow" data-day="${d}" data-i="${i}">
+        <button class="handle" data-role="handle" aria-label="drag to reorder">&#8942;&#8942;</button>
         <select data-role="ex">${Object.keys(EXERCISES).sort().map(e =>
           `<option value="${e}" ${e === p.exercise ? "selected" : ""}>${label(e)}</option>`).join("")}</select>
         <div class="stepper">
@@ -570,6 +576,7 @@ function renderPlan() {
       ensureEditable(); state.routine.week[d].plan.splice(i, 1);
       saveRoutine(); renderPlan();
     };
+    row.querySelector('[data-role="handle"]').addEventListener("pointerdown", (e) => startDrag(e, row, d));
   }
   for (const btn of $("planweek").querySelectorAll('[data-role="add"]')) {
     btn.onclick = () => {
@@ -578,6 +585,55 @@ function renderPlan() {
       saveRoutine(); renderPlan();
     };
   }
+}
+
+// Pointer-based reorder - not the HTML5 drag-and-drop API, which has no real touch
+// support and this has to work with a thumb, mid-session. Rows in the SAME day only;
+// reordering across days is a different edit (move + remove) and out of scope here.
+function startDrag(e, row, day) {
+  e.preventDefault();
+  const list = [...row.parentElement.querySelectorAll(".dayrow")];
+  const fromIndex = list.indexOf(row);
+  const h = row.getBoundingClientRect().height;
+  let current = fromIndex;
+  const startY = e.clientY;
+
+  row.setPointerCapture(e.pointerId);
+  row.classList.add("dragging");
+
+  // Recomputed from each row's FIXED original index against fromIndex/current on every
+  // change, not patched incrementally - an incremental patch loses track of rows that
+  // move back out of the affected range when the drag reverses direction mid-gesture.
+  function onMove(ev) {
+    const dy = ev.clientY - startY;
+    row.style.transform = `translateY(${dy}px)`;
+    const slot = clamp(Math.round(fromIndex + dy / h), 0, list.length - 1);
+    if (slot === current) return;
+    current = slot;
+    list.forEach((el, idx) => {
+      if (el === row) return;
+      const shift = (current > fromIndex && idx > fromIndex && idx <= current) ? -1
+        : (current < fromIndex && idx < fromIndex && idx >= current) ? 1 : 0;
+      el.style.transform = shift ? `translateY(${shift * h}px)` : "";
+    });
+  }
+  function onUp() {
+    row.releasePointerCapture(e.pointerId);
+    row.removeEventListener("pointermove", onMove);
+    row.removeEventListener("pointerup", onUp);
+    row.removeEventListener("pointercancel", onUp);
+    if (current !== fromIndex) {
+      ensureEditable();
+      const plan = state.routine.week[day].plan;
+      const [item] = plan.splice(fromIndex, 1);
+      plan.splice(current, 0, item);
+      saveRoutine();
+    }
+    renderPlan();
+  }
+  row.addEventListener("pointermove", onMove);
+  row.addEventListener("pointerup", onUp);
+  row.addEventListener("pointercancel", onUp);
 }
 
 function exportYaml() {
