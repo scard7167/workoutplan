@@ -43,22 +43,28 @@
       <div class="feedback" id="feedback" aria-live="polite"></div>
 
       <div class="actions">
-        <button id="btn-end" class="primary">Finish - show the rows</button>
+        <button id="btn-submit" class="primary">Submit &amp; next day</button>
+        <button id="btn-end">Export rows</button>
         <button id="btn-clear">Discard</button>
       </div>
       <pre class="csv" id="csvout" hidden></pre>
 
       <p class="fineprint">
-        Prototype: the session lives in this browser. Nothing is written to
-        <code>log.csv</code> - Finish prints the rows the CLI appends. Loads come from the
-        double-progression rule in <code>config.yaml</code>, never from anywhere else.
-        Weight only - reps are always the target shown, RIR is always blank, so a deload
-        can't trigger from what's logged here.
+        <b>Submit</b> banks the session on this device and moves to the next day. It counts
+        toward the volume bands and becomes the "last week" reference for next time - but
+        the strength index, per-lift trends, bridge, stalls and adherence come from
+        <code>analyze.py</code>, so those only move once you Export the rows into
+        <code>log.csv</code> and re-run it. Nothing here is written to
+        <code>log.csv</code> directly. Loads come from the double-progression rule in
+        <code>config.yaml</code>, never from anywhere else. Weight only - reps are always
+        the target shown, RIR always blank, so a deload can't trigger from what's logged
+        here.
       </p>
     </section>
 
     <!-- ----------------------------------------------------------- TRENDS -->
     <section class="panel" id="p-trends" role="tabpanel" aria-labelledby="tab-trends" hidden>
+      <div class="note" id="localnote" hidden></div>
       <div class="kpis" id="kpis"></div>
 
       <section class="card">

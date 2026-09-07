@@ -22,17 +22,34 @@ const MUSCLES = ["chest","lats","upper_back","front_delts","side_delts","rear_de
 const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
 const STORE_SESSION = "strengthlog.session.v3";
 const STORE_ROUTINE = "strengthlog.routine.v2";
+const STORE_LOG = "strengthlog.committed.v1";
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const state = {
-  date: new Date().toISOString().slice(0, 10),
+  dayOffset: 0,      // days ahead of the real date; Submit advances it to the next day
+  date: "",          // derived from dayOffset - always set via setDay()
   sets: [],
+  committed: [],     // sessions submitted on this device, not yet in an analyze.py run
   sticky: null,
   window: 7,
   lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
   routine: null,     // null = use the file
 };
+
+// Local date parts, not toISOString(): that converts to UTC first, so anyone east of
+// Greenwich logging before ~02:00 would have their session filed under yesterday.
+function isoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
+         `${String(d.getDate()).padStart(2, "0")}`;
+}
+function setDay(offset) {
+  state.dayOffset = offset;
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  state.date = isoDate(d);
+}
+setDay(0);
 
 const routine = () => state.routine || ROUTINE;
 // Cheap stable hash (djb2) of the shipped routine, used to tell whether a stored local
@@ -43,19 +60,20 @@ function routineFingerprint(r) {
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
   return String(h);
 }
-const todayKey = () => DAYS[(new Date().getDay() + 6) % 7];
+const todayKey = () => DAYS[((new Date().getDay() + 6) % 7 + state.dayOffset) % 7];
 const label = (e) => e.replace(/_/g, " ");
 
 // --------------------------------------------------- the progression rule
 const roundDown = (kg, inc) => Math.floor((kg + 1e-9) / inc) * inc;
 
+const history = () => [...SEED_LOG, ...state.committed];
+
 function priorSession(exercise) {
-  const dates = [...new Set(SEED_LOG.filter(r => r.exercise === exercise && r.date < state.date)
-                                    .map(r => r.date))].sort();
+  const all = history().filter(r => r.exercise === exercise && r.date < state.date);
+  const dates = [...new Set(all.map(r => r.date))].sort();
   if (!dates.length) return null;
   const d = dates[dates.length - 1];
-  return SEED_LOG.filter(r => r.exercise === exercise && r.date === d)
-                 .sort((a, b) => a.set_no - b.set_no);
+  return all.filter(r => r.date === d).sort((a, b) => a.set_no - b.set_no);
 }
 
 function deload(load, ex, floor) {
@@ -72,15 +90,32 @@ function prescribeJS(exercise) {
   const ex = EXERCISES[exercise];
   const [floor, ceiling] = ex.rep_range;
   const prior = priorSession(exercise);
-  if (!prior) return { weight_kg: null, target_reps: floor, reason: "no baseline" };
+  if (!prior) return { weight_kg: null, target_reps: floor, reason: "no baseline", basis_date: null };
+  const basis_date = prior[0].date;
   const load = prior[prior.length - 1].weight_kg;
-  if (prior.some(s => s.reps < floor && s.rir === 0)) return deload(load, ex, floor);
+  if (prior.some(s => s.reps < floor && s.rir === 0))
+    return { ...deload(load, ex, floor), basis_date };
   if (prior.every(s => s.reps >= ceiling && s.rir !== null && s.rir <= PROGRESSION.rir_ceiling))
-    return { weight_kg: load + ex.increment, target_reps: floor, reason: "progress" };
+    return { weight_kg: load + ex.increment, target_reps: floor, reason: "progress", basis_date };
   return { weight_kg: load, target_reps: Math.min(ceiling, Math.max(...prior.map(s => s.reps)) + 1),
-           reason: "hold" };
+           reason: "hold", basis_date };
 }
-const prescribe = (e) => ANALYTICS.prescriptions[e] || prescribeJS(e);
+// analyze.py is the authority, but it only knows what was in log.csv when it last ran.
+// Once a session submitted on this device is both usable as a baseline (before today)
+// and newer than the one Python computed from, its own basis is stale - fall back to
+// prescribeJS, which applies the same rule to the newer input. Without this the row
+// would show "last week 100" next to a prescription of 45 from a superseded session.
+//
+// Note such a session can never produce "progress": Today logs a blank RIR, and the
+// rule does not treat unverified as proven. It holds at the last logged load, which is
+// the correct answer given what was actually recorded.
+const prescribe = (e) => {
+  const py = ANALYTICS.prescriptions[e];
+  if (!py) return prescribeJS(e);
+  const superseded = state.committed.some(r =>
+    r.exercise === e && r.date < state.date && (!py.basis_date || r.date > py.basis_date));
+  return superseded ? prescribeJS(e) : py;
+};
 
 // The weight just logged, paired with the target reps for another set of it today.
 // No deload branch here: that needs an actual rep/RIR miss, and Today only logs
@@ -162,8 +197,16 @@ function renderToday() {
   const entry = routine().week[day];
   const plan = entry.plan;
   const d = new Date();
-  $("today-day").textContent =
-    d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+  d.setDate(d.getDate() + state.dayOffset);
+  const dayText = d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+  // Submitting moves the plan on without the calendar moving, so say so plainly and
+  // give a way back - anything logged while ahead is dated to the day being shown.
+  $("today-day").innerHTML = state.dayOffset === 0
+    ? dayText
+    : `${dayText} <span class="ahead">+${state.dayOffset}d ahead</span> ` +
+      `<button class="backtoday" id="btn-backtoday">back to today</button>`;
+  if (state.dayOffset !== 0)
+    $("btn-backtoday").onclick = () => { setDay(0); saveSession(); renderToday(); };
   $("today-name").textContent = entry.name;
 
   const planned = plan.reduce((a, p) => a + p.sets, 0);
@@ -323,7 +366,7 @@ function showPrescription(exercise) {
 // ------------------------------------------------------------ TRENDS view
 function volumeCounts(days) {
   const live = state.sets.map(s => ({ ...s, date: state.date }));
-  const all = [...SEED_LOG, ...live];
+  const all = [...history(), ...live];
   const end = all.map(r => r.date).sort().pop();
   const start = new Date(Date.parse(end) - (days - 1) * 864e5).toISOString().slice(0, 10);
   const win = all.filter(r => r.date >= start && r.date <= end);
@@ -545,7 +588,24 @@ function renderIndex() {
     : "Every lift has a baseline.";
 }
 
+// Everything below the fold on Trends comes from analyze.py at build time. Sessions
+// submitted on this device are NOT in it, and saying so beats quietly showing numbers
+// that are a week stale.
+function renderLocalNote() {
+  const el = $("localnote");
+  const days = [...new Set(state.committed.map(r => r.date))];
+  if (!days.length) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML =
+    `<b>${days.length} session${days.length === 1 ? "" : "s"} submitted here</b> ` +
+    `(${days.sort().join(", ")}), counted in the volume bands below and in each lift's ` +
+    `"last week" reference - but not in the strength index, per-lift trends, bridge, ` +
+    `stalls or adherence. Those are computed by <code>analyze.py</code>: Export rows, ` +
+    `paste into <code>log.csv</code>, re-run it.`;
+}
+
 function renderTrends() {
+  renderLocalNote();
   renderKpis(); renderLiftGrid(); renderDetail(); renderMeters();
   renderBridge(); renderStalls(); renderBalance(); renderIndex();
 }
@@ -704,26 +764,81 @@ function exportYaml() {
 }
 
 // ------------------------------------------------------------ session I/O
+const csvRow = (s) =>
+  `${s.date},strength,${s.exercise},${s.set_no},${+s.weight_kg},${s.reps},` +
+  `${s.rir === null || s.rir === undefined ? "" : s.rir},`;
+
+// Everything submitted on this device plus whatever is open right now, so nothing is
+// lost between here and log.csv.
 function showCsv() {
   const out = $("csvout");
-  if (!state.sets.length) { out.hidden = true; return showFeedback(`<span class="err">? no open session</span>`); }
-  const rows = state.sets.map(s =>
-    `${state.date},strength,${s.exercise},${s.set_no},${+s.weight_kg},${s.reps},${s.rir === null ? "" : s.rir},`);
-  out.textContent = "date,type,exercise,set_no,weight_kg,reps,rir,notes\n" + rows.join("\n");
+  const live = state.sets.map(s => ({ ...s, date: state.date }));
+  const rows = [...state.committed, ...live].sort((a, b) =>
+    a.date.localeCompare(b.date) || a.exercise.localeCompare(b.exercise) || a.set_no - b.set_no);
+  if (!rows.length) { out.hidden = true; return showFeedback(`<span class="err">? nothing logged yet</span>`); }
+  out.textContent = "date,type,exercise,set_no,weight_kg,reps,rir,notes\n" + rows.map(csvRow).join("\n");
   out.hidden = false;
-  const { counts } = volumeCounts(7);
-  const top = MUSCLES.filter(m => counts[m] > 0).sort((a, b) => counts[b] - counts[a]).slice(0, 3);
+  const days = new Set(rows.map(r => r.date)).size;
   showFeedback(
-    `<span class="l1">logged: ${state.sets.length} sets, ${new Set(state.sets.map(s => s.exercise)).size} exercises</span>\n` +
-    `<span class="l2">volume 7d: ${top.map(m => `${label(m)} ${counts[m]}`).join(", ")}</span>\n` +
-    `<span class="hint">paste the rows below into log.csv, then run analyze.py validate</span>`);
+    `<span class="l1">${rows.length} sets across ${days} session${days === 1 ? "" : "s"}</span>\n` +
+    `<span class="l2">${state.committed.length} submitted, ${live.length} still open</span>\n` +
+    `<span class="hint">paste into log.csv, then: analyze.py validate &amp;&amp; web/build_data.py</span>`);
+}
+
+// Submit: bank the session on this device and move to the next day's plan.
+//
+// This is the honest limit of what a static page can do. It makes the session real for
+// everything the browser computes itself - volume against the bands, and the "last week"
+// baseline the next session is measured against, which is most of the point. It does NOT
+// touch the deep analytics: e1RM slopes, strength index, the volume-load bridge, stalls
+// and adherence all come from analyze.py at build time and stay frozen until log.csv is
+// updated and it runs again. Recomputing them here would mean a second implementation of
+// the rule in JavaScript, which is the one thing CLAUDE.md rules out.
+function submitSession() {
+  if (!state.sets.length)
+    return showFeedback(`<span class="err">? nothing logged - no session to submit</span>`);
+
+  const dated = state.sets.map(s => ({ ...s, date: state.date, notes: "" }));
+  const wasDate = state.date;
+  const sets = dated.length;
+  const lifts = new Set(dated.map(s => s.exercise)).size;
+
+  state.committed = [...state.committed, ...dated];
+  saveCommitted();
+  state.sets = [];
+  state.sticky = null;
+  $("csvout").hidden = true;
+  saveSession();
+
+  setDay(state.dayOffset + 1);
+  saveSession();          // the new (empty) day, so a reload lands in the same place
+  renderToday(); renderTrends();
+
+  showFeedback(
+    `<span class="l1">submitted ${wasDate}: ${sets} sets, ${lifts} lifts</span>\n` +
+    `<span class="l2">next up ${state.date} &middot; ${routine().week[todayKey()].name}</span>\n` +
+    `<span class="hint">counts toward volume and next week's baseline · deep trends need ` +
+    `an analyze.py run</span>`);
+}
+
+function saveCommitted() {
+  try { localStorage.setItem(STORE_LOG, JSON.stringify(state.committed)); }
+  catch { /* private mode */ }
+}
+function loadCommitted() {
+  try {
+    const raw = localStorage.getItem(STORE_LOG);
+    const d = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(d)) state.committed = d.filter(r => r && r.date && r.exercise);
+  } catch { /* ignore */ }
 }
 
 function showFeedback(html) { $("feedback").innerHTML = html; }
 
 function saveSession() {
   try { localStorage.setItem(STORE_SESSION, JSON.stringify(
-    { date: state.date, sets: state.sets, sticky: state.sticky })); }
+    { date: state.date, sets: state.sets, sticky: state.sticky,
+      dayOffset: state.dayOffset })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -731,6 +846,9 @@ function loadSession() {
     const raw = localStorage.getItem(STORE_SESSION);
     if (!raw) return;
     const d = JSON.parse(raw);
+    // Restore the day being viewed first, then only accept the sets if they belong to
+    // that same date - a session left open overnight must not reappear under today.
+    if (d && Number.isInteger(d.dayOffset) && d.dayOffset > 0) setDay(d.dayOffset);
     if (d && d.date === state.date && Array.isArray(d.sets)) {
       state.sets = d.sets; state.sticky = d.sticky || null;
     }
@@ -746,6 +864,7 @@ function selectTab(name) {
 }
 for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
 
+$("btn-submit").onclick = submitSession;
 $("btn-end").onclick = showCsv;
 $("btn-clear").onclick = () => {
   if (!state.sets.length || confirm("Discard the open session? Nothing has been written to log.csv.")) {
@@ -774,6 +893,7 @@ $("btn-reset").onclick = () => {
 
 // ----------------------------------------------------------------- start
 loadRoutine();
+loadCommitted();
 loadSession();
 selectTab("today");
 renderToday();

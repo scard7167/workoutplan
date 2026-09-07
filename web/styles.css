@@ -60,6 +60,13 @@ main { flex: 1; padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
   color: var(--muted); margin-bottom: 7px;
 }
 h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; text-wrap: balance; }
+.ahead { color: var(--warn); letter-spacing: .04em; }
+.backtoday {
+  background: none; border: 1px solid var(--line-2); color: var(--ink-2); cursor: pointer;
+  border-radius: 5px; padding: 2px 6px; font: 500 9px/1 var(--sans); letter-spacing: .08em;
+  text-transform: uppercase; margin-left: 4px; vertical-align: middle;
+}
+.backtoday:hover { color: var(--ink); border-color: var(--accent); }
 .progress { text-align: right; font: 500 12px/1.35 var(--mono); color: var(--ink-2); }
 .progress b { display: block; font: 600 24px/1 var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; }
 
