@@ -33,6 +33,7 @@ const state = {
   committed: [],     // sessions submitted on this device, not yet in an analyze.py run
   sticky: null,
   window: 7,
+  logLimit: 8,
   lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
   routine: null,     // null = use the file
 };
@@ -604,10 +605,112 @@ function renderLocalNote() {
     `paste into <code>log.csv</code>, re-run it.`;
 }
 
+// --------------------------------------------------------- session log
+// Every session on record - the seeded history plus anything submitted on this device -
+// newest first, each lift shown against its OWN previous session. That comparison is
+// per-exercise, not per-week: a lift trained twice a week is measured against 3 days
+// ago, not against a calendar week that never happened.
+function buildSessionLog() {
+  const rows = history();
+  const perEx = new Map();     // exercise -> date -> sets
+  const perDate = new Map();   // date -> exercise -> sets
+  for (const r of rows) {
+    if (!perEx.has(r.exercise)) perEx.set(r.exercise, new Map());
+    const em = perEx.get(r.exercise);
+    if (!em.has(r.date)) em.set(r.date, []);
+    em.get(r.date).push(r);
+
+    if (!perDate.has(r.date)) perDate.set(r.date, new Map());
+    const dm = perDate.get(r.date);
+    if (!dm.has(r.exercise)) dm.set(r.exercise, []);
+    dm.get(r.exercise).push(r);
+  }
+  const submittedDates = new Set(state.committed.map(r => r.date));
+
+  return [...perDate.keys()].sort().reverse().map(date => {
+    const exercises = [...perDate.get(date)].map(([ex, sets]) => {
+      sets = [...sets].sort((a, b) => a.set_no - b.set_no);
+      // A session carrying no load is measured in reps, not kilos - a 0 kg "top weight"
+      // is not a number, and differencing two of them fakes a flat trend. If the previous
+      // session carried load and this one does not (or the reverse), the two are not the
+      // same measurement and there is no delta to state.
+      const bw = sets.every(s => s.weight_kg === 0);
+      const topOf = (arr, asReps) => asReps
+        ? Math.max(...arr.map(s => s.reps)) : Math.max(...arr.map(s => s.weight_kg));
+      const top = topOf(sets, bw);
+      const priorDates = [...perEx.get(ex).keys()].filter(d => d < date).sort();
+      const prevDate = priorDates[priorDates.length - 1] || null;
+      const prevSets = prevDate ? perEx.get(ex).get(prevDate) : null;
+      const prevBw = prevSets ? prevSets.every(s => s.weight_kg === 0) : null;
+      const prevTop = prevSets ? topOf(prevSets, prevBw) : null;
+      const gap = prevDate
+        ? Math.round((Date.parse(date) - Date.parse(prevDate)) / 864e5) : null;
+      const comparable = prevSets !== null && prevBw === bw;
+      return { ex, sets, bw, top, prevDate, prevSets, prevBw, prevTop, gap, comparable,
+               delta: comparable ? +(top - prevTop).toFixed(2) : null };
+    }).sort((a, b) => a.ex.localeCompare(b.ex));
+    const setCount = exercises.reduce((a, e) => a + e.sets.length, 0);
+    return { date, exercises, setCount, submitted: submittedDates.has(date) };
+  });
+}
+
+const weekdayOf = (iso) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return DAYS[(new Date(y, m - 1, d).getDay() + 6) % 7];
+};
+
+function renderSessionLog() {
+  const log = buildSessionLog();
+  const shown = log.slice(0, state.logLimit);
+  $("log-meta").textContent =
+    `${log.length} sessions · ${new Set(state.committed.map(r => r.date)).size} submitted here`;
+  $("btn-more").hidden = shown.length >= log.length;
+  $("btn-more").textContent = `Show more (${log.length - shown.length} older)`;
+
+  $("sessionlog").innerHTML = shown.map(sn => {
+    const lifts = sn.exercises.map(e => {
+      const cell = (s) => e.bw ? `bw×${s.reps}` : fmtW(s.weight_kg, e.ex);
+      const weights = e.sets.map(cell).join(" · ");
+      const prevTxt = e.prevBw ? `${e.prevTop} reps` : fmtW(e.prevTop, e.ex);
+      const prev = e.prevDate === null
+        ? `<span class="slogprev">first time</span>`
+        : `<span class="slogprev">prev ${prevTxt}` +
+          `${e.gap ? ` · ${e.gap}d` : ""}</span>`;
+      const d = e.delta;
+      const dcls = d === null || d === 0 ? "" : d > 0 ? "up" : "down";
+      const dtxt = d === null ? "" : d === 0 ? "=" :
+        `${d > 0 ? "+" : ""}${d}${e.bw ? "r" : ""}`;
+      return `<div class="slogrow">
+        <span class="slogex">${label(e.ex)}</span>
+        <span class="slogw">${weights}</span>
+        ${prev}
+        <span class="slogd ${dcls}">${dtxt}</span></div>`;
+    }).join("");
+    return `<div class="slog">
+      <div class="sloghead">
+        <span class="slogdate">${sn.date}</span>
+        <span class="slogday">${weekdayOf(sn.date)}</span>
+        <span class="slogsets">${sn.setCount} sets</span>
+        ${sn.submitted ? `<span class="slogbadge">submitted</span>
+          <button class="slogdel" data-date="${sn.date}" aria-label="Remove ${sn.date}">remove</button>` : ""}
+      </div>${lifts}</div>`;
+  }).join("");
+
+  for (const btn of $("sessionlog").querySelectorAll(".slogdel")) {
+    btn.onclick = () => {
+      const d = btn.dataset.date;
+      if (!confirm(`Remove the session submitted on ${d}? It has not reached log.csv yet.`)) return;
+      state.committed = state.committed.filter(r => r.date !== d);
+      saveCommitted(); renderToday(); renderTrends();
+    };
+  }
+}
+
 function renderTrends() {
   renderLocalNote();
   renderKpis(); renderLiftGrid(); renderDetail(); renderMeters();
   renderBridge(); renderStalls(); renderBalance(); renderIndex();
+  renderSessionLog();
 }
 
 // -------------------------------------------------------------- PLAN view
@@ -864,6 +967,7 @@ function selectTab(name) {
 }
 for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
 
+$("btn-more").onclick = () => { state.logLimit += 20; renderSessionLog(); };
 $("btn-submit").onclick = submitSession;
 $("btn-end").onclick = showCsv;
 $("btn-clear").onclick = () => {
