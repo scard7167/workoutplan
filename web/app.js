@@ -36,7 +36,90 @@ const state = {
   logLimit: 8,
   lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
   routine: null,     // null = use the file
+  provisional: {},   // lifts that exist in this browser only - see below
+  photos: [],        // machine photos waiting to be identified (this session only)
+  proposals: null,   // what Claude read off them, pending your confirmation
 };
+
+// --------------------------------------------- provisional exercises
+// Two doors lead here: a name typed into the Plan tab that the library does not know,
+// and a machine identified from a photo. Both produce a lift that exists in this
+// browser and nowhere else.
+//
+// It is deliberately NOT a library entry. exercises.yaml is edited in the repo, by a
+// human, because `increment` and `rep_range` decide every future load this lift will
+// ever be prescribed - a guessed increment corrupts them silently and forever. So a
+// provisional lift carries those fields as null until someone fills them in, and until
+// they are filled in it can be PLANNED but not prescribed for and not logged. Export
+// carries it out as an exercises.yaml stub; that paste is what makes it real.
+const STORE_PROV = "strengthlog.provisional.v1";
+
+// The library as this browser currently sees it: the shipped file, plus whatever is
+// provisional. Everything downstream (the rule, the feedback, volume) reads this, so a
+// provisional lift needs no special case anywhere except where readiness is checked.
+const LIB = Object.create(null);
+function rebuildLib() {
+  for (const k of Object.keys(LIB)) delete LIB[k];
+  Object.assign(LIB, EXERCISES, state.provisional);
+}
+rebuildLib();
+
+const isProvisional = (e) => !EXERCISES[e] && !!state.provisional[e];
+const provReady = (p) => !!p && typeof p.increment === "number" && p.increment > 0
+  && Array.isArray(p.rep_range) && p.rep_range[0] > 0 && p.rep_range[1] >= p.rep_range[0]
+  && Array.isArray(p.muscles) && p.muscles.length > 0;
+// Ready = the progression rule can actually run on it. A shipped entry always is;
+// analyze.py refuses to load exercises.yaml otherwise.
+const exReady = (e) => EXERCISES[e] ? true : provReady(state.provisional[e]);
+
+const slug = (s) => String(s).toLowerCase().trim()
+  .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+function loadProvisional() {
+  try {
+    const raw = localStorage.getItem(STORE_PROV);
+    if (raw) state.provisional = JSON.parse(raw) || {};
+  } catch { state.provisional = {}; }
+  rebuildLib();
+}
+function saveProvisional() {
+  rebuildLib();
+  try { localStorage.setItem(STORE_PROV, JSON.stringify(state.provisional)); }
+  catch (e) { showFeedback(`<span class="err">! could not save: ${e.name}. ` +
+    `Photos are the bulk of it - remove a few.</span>`); }
+}
+
+// Typed text -> a canonical name, the same way CLAUDE.md resolves a name mid-session:
+// canonical, then the display form, then aliases. No fuzzy matching - a near-miss that
+// silently picks the wrong lift is worse than being told there is no match.
+function resolveExercise(text) {
+  const q = String(text).toLowerCase().trim().replace(/\s+/g, " ");
+  if (!q) return null;
+  const k = slug(q);
+  if (LIB[k]) return k;
+  for (const [name, ex] of Object.entries(LIB)) {
+    if (label(name) === q) return name;
+    if ((ex.aliases || []).some(a => String(a).toLowerCase() === q)) return name;
+  }
+  return null;
+}
+
+function createProvisional(display, fields = {}) {
+  const key = slug(display);
+  if (!key || EXERCISES[key]) return key || null;
+  state.provisional[key] = {
+    aliases: fields.aliases || [],
+    muscles: (fields.muscles || []).filter(m => MUSCLES.includes(m)),
+    increment: typeof fields.increment === "number" && fields.increment > 0 ? fields.increment : null,
+    rep_range: Array.isArray(fields.rep_range) ? fields.rep_range : null,
+    bodyweight: !!fields.bodyweight,
+    image: fields.image || null,
+    note: fields.note || "",
+    source: fields.source || "typed",
+  };
+  saveProvisional();
+  return key;
+}
 
 // Local date parts, not toISOString(): that converts to UTC first, so anyone east of
 // Greenwich logging before ~02:00 would have their session filed under yesterday.
@@ -88,7 +171,11 @@ function deload(load, ex, floor) {
 // Fallback only. ANALYTICS.prescriptions is the authority for routine lifts; this covers
 // a lift the plan gained in the browser and Python has not seen.
 function prescribeJS(exercise) {
-  const ex = EXERCISES[exercise];
+  const ex = LIB[exercise];
+  // No increment and no rep range means there IS no progression rule for this lift yet.
+  // Returning a plausible-looking number here is the one thing the rule must never do.
+  if (!ex || !exReady(exercise))
+    return { weight_kg: null, target_reps: null, reason: "needs setup", basis_date: null };
   const [floor, ceiling] = ex.rep_range;
   const prior = priorSession(exercise);
   if (!prior) return { weight_kg: null, target_reps: floor, reason: "no baseline", basis_date: null };
@@ -130,7 +217,7 @@ function nextSet(just) {
 function fmtW(w, exercise) {
   if (w === null || w === undefined) return "-";
   if (w === 0) return "bw";
-  const plus = exercise && EXERCISES[exercise]?.bodyweight ? "+" : "";
+  const plus = exercise && LIB[exercise]?.bodyweight ? "+" : "";
   return `${plus}${+Number(w).toFixed(2)}`;
 }
 const fmtSet = (s) =>
@@ -221,7 +308,7 @@ function renderToday() {
     const rx = prescribe(p.exercise);
     const n = loggedFor(p.exercise);
     const cls = ["", n >= p.sets ? "done" : "", state.sticky === p.exercise ? "active" : ""].join(" ");
-    const img = EXERCISES[p.exercise]?.image;
+    const img = LIB[p.exercise]?.image;
     const thumb = img
       ? `<button class="thumb" data-img="${img}" aria-label="Show ${label(p.exercise)} photo">
            <img src="${img}" alt="" loading="lazy"></button>`
@@ -239,6 +326,7 @@ function renderToday() {
 
     // Last session's weight per set, greyed under each box - the number to beat.
     const prior = priorSession(p.exercise);
+    const ready = exReady(p.exercise);
     const slots = Array.from({ length: slotCount(p) }, (_, i) => {
       const setNo = i + 1;
       const logged = state.sets.find(s => s.exercise === p.exercise && s.set_no === setNo);
@@ -247,6 +335,7 @@ function renderToday() {
         <span class="slotn">${setNo}</span>
         <input type="text" inputmode="decimal" class="slotw" data-ex="${p.exercise}" data-set="${setNo}"
                placeholder="${placeholder}" value="${logged ? +logged.weight_kg : ""}"
+               ${ready ? "" : "disabled"}
                aria-label="${label(p.exercise)} set ${setNo} weight">
         <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
       </div>`;
@@ -268,8 +357,11 @@ function renderToday() {
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
         <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
       </div>
-      <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}
-        &middot; ${rx.target_reps} reps</span>
+      <span class="why ${rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
+        rx.reason === "needs setup"
+          ? "no increment or rep range yet &middot; set it in Plan"
+          : `${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}` +
+            ` &middot; ${rx.target_reps} reps`}</span>
       <div class="slots">${legend}${slots}</div></li>`;
   }).join("");
 
@@ -323,7 +415,14 @@ function commitSlot(exercise, setNo, raw) {
       `<span class="hint">was ${fmtSet(dropped)}</span>`);
   }
 
-  const ex = EXERCISES[exercise];
+  const ex = LIB[exercise];
+  if (!ex || !exReady(exercise)) {
+    renderToday();
+    return showFeedback(
+      `<span class="err">? ${label(exercise)} has no increment or rep range yet</span>\n` +
+      `<span class="hint">set them in Plan. Every row needs a rep target, and the rule ` +
+      `will not invent one.</span>`);
+  }
   const weight = parseFloat(trimmed.replace(",", "."));
   if (!Number.isFinite(weight) || weight < 0) {
     renderToday();
@@ -374,7 +473,7 @@ function volumeCounts(days) {
   const counts = Object.fromEntries(MUSCLES.map(m => [m, 0]));
   for (const s of win)
     if (s.rir === null || s.rir === undefined || s.rir <= METRICS.hard_set_rir)
-      for (const m of EXERCISES[s.exercise].muscles) counts[m]++;
+      for (const m of (LIB[s.exercise]?.muscles || [])) counts[m]++;
   return { counts, end, sessions: new Set(win.map(r => r.date)).size, sets: win.length };
 }
 
@@ -736,6 +835,36 @@ function ensureEditable() {
   if (!state.routine) state.routine = JSON.parse(JSON.stringify(ROUTINE));
 }
 
+// A provisional lift's missing half. Shown open while the lift is unusable, so the
+// blocker is the first thing on screen rather than something to go hunting for.
+function defPanel(key, open) {
+  const p = state.provisional[key];
+  const [floor, ceiling] = p.rep_range || [null, null];
+  return `<div class="exdef" data-role="def" data-key="${key}" ${open ? "" : "hidden"}>
+    ${p.image ? `<button class="thumb defthumb" data-role="preview" data-img="${p.image}"
+        aria-label="Show photo"><img src="${p.image}" alt=""></button>` : ""}
+    <div class="deflab">prime movers only</div>
+    <div class="defmus">${MUSCLES.map(m =>
+      `<button class="mchip ${p.muscles.includes(m) ? "on" : ""}" data-m="${m}">${m}</button>`
+    ).join("")}</div>
+    <div class="defnums">
+      <label>increment kg
+        <input type="number" step="0.5" min="0" data-f="inc" value="${p.increment ?? ""}" placeholder="?">
+      </label>
+      <label>reps
+        <input type="number" min="1" data-f="floor" value="${floor ?? ""}" placeholder="floor">
+        <span>&ndash;</span>
+        <input type="number" min="1" data-f="ceiling" value="${ceiling ?? ""}" placeholder="ceil">
+      </label>
+      <label class="defbw">
+        <input type="checkbox" data-f="bw" ${p.bodyweight ? "checked" : ""}> bodyweight
+      </label>
+    </div>
+    <p class="defnote">${p.note ? `<b>${p.note}</b><br>` : ""}Read the increment off the
+      stack. A guess corrupts every future prescription for this lift, silently.</p>
+  </div>`;
+}
+
 function renderPlan() {
   // Today's rows (prescribed loads, set counts) are derived from this same routine
   // state - every routine edit has to refresh both, or Today goes stale the moment
@@ -746,24 +875,34 @@ function renderPlan() {
   const planned = DAYS.reduce((a, d) => a + r.week[d].plan.reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
   $("plan-summary").innerHTML =
-    `<b>${r.lifts.length}</b>lifts · ${DAYS.length} days` +
+    `<b>${scheduledLifts(r).length}</b>lifts · ${DAYS.length} days` +
     (state.routine ? `<br><span style="color:var(--warn)">edited, not exported</span>` : "");
+
+  $("exlist").innerHTML = Object.keys(LIB).sort()
+    .map(e => `<option value="${label(e)}">`).join("");
 
   $("planweek").innerHTML = DAYS.map(d => {
     const day = r.week[d];
     const n = day.plan.reduce((a, p) => a + p.sets, 0);
-    const rows = day.plan.map((p, i) => `
-      <div class="dayrow" data-day="${d}" data-i="${i}">
+    const rows = day.plan.map((p, i) => {
+      const prov = isProvisional(p.exercise), bad = !exReady(p.exercise);
+      return `
+      <div class="dayrow ${bad ? "unset" : ""}" data-day="${d}" data-i="${i}">
         <button class="handle" data-role="handle" aria-label="drag to reorder">&#8942;&#8942;</button>
-        <select data-role="ex">${Object.keys(EXERCISES).sort().map(e =>
-          `<option value="${e}" ${e === p.exercise ? "selected" : ""}>${label(e)}</option>`).join("")}</select>
+        <input class="exin" data-role="ex" list="exlist" value="${label(p.exercise)}"
+               title="${label(p.exercise)}" autocomplete="off" autocapitalize="none"
+               spellcheck="false" aria-label="exercise name">
         <div class="stepper">
           <button data-role="dec" aria-label="fewer sets">&minus;</button>
           <span class="n">${p.sets}</span>
           <button data-role="inc" aria-label="more sets">+</button>
         </div>
         <button class="rm" data-role="rm" aria-label="remove">&times;</button>
-      </div>`).join("");
+        ${prov ? `<button class="provtag ${bad ? "bad" : ""}" data-role="deftoggle">${
+          bad ? "needs setup - no increment or rep range" : "not in library"}</button>` : ""}
+        ${prov ? defPanel(p.exercise, bad) : ""}
+      </div>`;
+    }).join("");
     return `<div class="day">
       <div class="dayhead ${d === todayKey() ? "today" : ""}">
         <span class="dd">${d}</span><span class="dn">${day.name}</span>
@@ -776,9 +915,32 @@ function renderPlan() {
   for (const row of $("planweek").querySelectorAll(".dayrow")) {
     const d = row.dataset.day, i = +row.dataset.i;
     row.querySelector('[data-role="ex"]').onchange = (e) => {
-      ensureEditable(); state.routine.week[d].plan[i].exercise = e.target.value;
+      const typed = e.target.value;
+      const was = state.routine ? state.routine.week[d].plan[i].exercise : r.week[d].plan[i].exercise;
+      if (!typed.trim()) { renderPlan(); return; }          // blank is not an edit
+      let key = resolveExercise(typed);
+      let minted = false;
+      if (!key) {
+        // Free text the library does not know. Not an error and not a guess: it becomes
+        // a lift of this browser's own, inert until its increment and rep range are set.
+        key = createProvisional(typed, { source: "typed" });
+        minted = true;
+      }
+      if (!key || key === was) { renderPlan(); return; }
+      ensureEditable(); state.routine.week[d].plan[i].exercise = key;
       saveRoutine(); renderPlan();
+      if (minted) showFeedback(
+        `<span class="l1">${label(key)} added to ${d}</span>\n` +
+        `<span class="l2">not in exercises.yaml - no rule for it yet</span>\n` +
+        `<span class="l3">set its increment and rep range in Plan, then Export</span>`);
     };
+    const tag = row.querySelector('[data-role="deftoggle"]');
+    if (tag) tag.onclick = () => {
+      const d2 = row.querySelector('[data-role="def"]');
+      if (d2) d2.hidden = !d2.hidden;
+    };
+    const def = row.querySelector('[data-role="def"]');
+    if (def) wireDefPanel(def);
     row.querySelector('[data-role="inc"]').onclick = () => {
       ensureEditable(); state.routine.week[d].plan[i].sets =
         clamp(state.routine.week[d].plan[i].sets + 1, 1, 8);
@@ -799,9 +961,56 @@ function renderPlan() {
     btn.onclick = () => {
       ensureEditable();
       state.routine.week[btn.dataset.day].plan.push({ exercise: r.lifts[0], sets: 2 });
+      // the new row's combobox is where you type what it actually is
       saveRoutine(); renderPlan();
     };
   }
+}
+
+// This panel edits IN PLACE and never calls renderPlan(). Re-rendering the plan on a
+// field change replaces the very input being typed into: on a phone that eats the
+// keystroke, the focus and the caret. So each edit writes state, saves, and touches
+// only the two things that can visibly change - the row's own flag, and Today.
+function wireDefPanel(def) {
+  const key = def.dataset.key;
+  const p = state.provisional[key];
+  if (!p) return;
+  const row = def.closest(".dayrow");
+
+  const refresh = () => {
+    const bad = !exReady(key);
+    row.classList.toggle("unset", bad);
+    const tag = row.querySelector('[data-role="deftoggle"]');
+    if (tag) {
+      tag.classList.toggle("bad", bad);
+      tag.textContent = bad ? "needs setup - no increment or rep range" : "not in library";
+    }
+    renderToday();   // the prescription and the set boxes hang on exactly this
+  };
+
+  for (const chip of def.querySelectorAll(".mchip")) {
+    chip.onclick = () => {
+      const m = chip.dataset.m;
+      p.muscles = p.muscles.includes(m) ? p.muscles.filter(x => x !== m) : [...p.muscles, m];
+      chip.classList.toggle("on", p.muscles.includes(m));
+      saveProvisional(); refresh();
+    };
+  }
+  const num = (f) => {
+    const v = parseFloat(String(def.querySelector(`[data-f="${f}"]`).value).replace(",", "."));
+    return Number.isFinite(v) && v > 0 ? v : null;
+  };
+  const write = () => {
+    p.increment = num("inc");
+    const floor = num("floor"), ceiling = num("ceiling");
+    p.rep_range = floor && ceiling && ceiling >= floor ? [floor, ceiling] : null;
+    p.bodyweight = def.querySelector('[data-f="bw"]').checked;
+    saveProvisional(); refresh();
+  };
+  // input, not change: change waits for blur, so the last field typed before pressing
+  // Export would not have been written yet.
+  for (const el of def.querySelectorAll('input[type="number"]')) el.oninput = write;
+  def.querySelector('[data-f="bw"]').onchange = write;
 }
 
 // Pointer-based reorder - not the HTML5 drag-and-drop API, which has no real touch
@@ -853,18 +1062,318 @@ function startDrag(e, row, day) {
   row.addEventListener("pointercancel", onUp);
 }
 
+// Derived, never carried: analyze.py requires lifts and the schedule to agree exactly,
+// and the stored `lifts` list goes stale the moment a lift is added in the browser.
+const scheduledLifts = (r) =>
+  [...new Set(DAYS.flatMap(d => r.week[d].plan.map(p => p.exercise)))].sort();
+
 function exportYaml() {
   const r = routine();
-  const lines = ["lifts:", ...r.lifts.map(l => `  - ${l}`), "", "week:"];
+  const scheduled = scheduledLifts(r);
+  const out = $("yamlout");
+  out.hidden = false;
+
+  // Refuse rather than emit a routine that cannot load. A failed export costs a minute;
+  // a plausible-looking increment pasted into exercises.yaml is wrong for months.
+  const unset = scheduled.filter(e => !exReady(e));
+  if (unset.length) {
+    out.textContent =
+      `# NOT EXPORTED - ${unset.length} lift(s) have no increment or rep range:\n` +
+      unset.map(e => `#   ${label(e)}`).join("\n") +
+      "\n#\n# Open the row and fill them in. analyze.py would reject this routine, and\n" +
+      "# a guessed increment is worse than a failed export.";
+    return;
+  }
+
+  const lines = [];
+  const prov = scheduled.filter(isProvisional);
+  if (prov.length) {
+    // Every non-YAML line carries the ===== marker, so selecting the block and
+    // stripping "# " cannot drag a sentence of prose into exercises.yaml with it.
+    lines.push("# ===== exercises.yaml - add these FIRST, uncommented. routine.yaml",
+               "# ===== below names them and will not load until they exist.");
+    for (const e of prov) {
+      const x = state.provisional[e];
+      lines.push(`# ${e}:`);
+      lines.push(`#   aliases: [${(x.aliases || []).map(a => JSON.stringify(a)).join(", ")}]`);
+      lines.push(`#   muscles: [${x.muscles.join(", ")}]`);
+      lines.push(`#   increment: ${x.increment}`);
+      lines.push(`#   rep_range: [${x.rep_range[0]}, ${x.rep_range[1]}]`);
+      if (x.bodyweight) lines.push("#   bodyweight: true");
+      if (x.note) lines.push(`#   # read off the machine: ${x.note}`);
+    }
+    lines.push("# ===== end exercises.yaml", "");
+  }
+  lines.push("lifts:", ...scheduled.map(l => `  - ${l}`), "", "week:");
   for (const d of DAYS) {
     const day = r.week[d];
     lines.push(`  ${d}:`, `    name: ${day.name}`, "    plan:");
     for (const p of day.plan) lines.push(`      - {exercise: ${p.exercise}, sets: ${p.sets}}`);
   }
-  const out = $("yamlout");
   out.textContent = lines.join("\n");
-  out.hidden = false;
 }
+
+// ------------------------------------------------------------ photo dump
+// Drop in photos of the machines - a nameplate, the QR-code landing page, the machine
+// itself - and get back a proposed lift per photo. In the published Artifact this runs
+// against Claude through the `sample` capability, on your own account. Served anywhere
+// else (Vercel, a file:// copy) there is no model behind the page: the photos are still
+// kept and attached to lifts, and identification is what `/scan` does in Claude Code.
+//
+// What comes back is a PROPOSAL, never a commit. Nothing reaches the plan until you
+// press Add, and `increment` arrives null unless Claude could actually read it off the
+// machine - the one field that must never be a guess.
+let SAMPLE = null, SAMPLE_IMAGES = null;
+
+// ~480px long edge at q0.78, the same shape /scan saves reference photos in: a dozen
+// of these fit in localStorage, a dozen phone originals do not.
+function shrinkImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, 480 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      c.toBlob(
+        (blob) => blob
+          ? resolve({ blob, url: c.toDataURL("image/jpeg", 0.78) })
+          : reject(new Error("could not encode")),
+        "image/jpeg", 0.78);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("not an image")); };
+    img.src = url;
+  });
+}
+
+async function addPhotos(files) {
+  const list = [...files].filter(f => f.type.startsWith("image/"));
+  if (!list.length) return;
+  for (const f of list) {
+    try {
+      const { blob, url } = await shrinkImage(f);
+      state.photos.push({ id: `p${Date.now()}${state.photos.length}`, blob, url, name: f.name });
+    } catch (e) {
+      showScanNote(`could not read ${f.name}: ${e.message}`, true);
+    }
+  }
+  state.proposals = null;
+  renderScan();
+}
+
+const showScanNote = (msg, bad) => {
+  $("scan-note").innerHTML = bad ? `<span class="err">${msg}</span>` : msg;
+};
+
+function libraryDigest() {
+  return Object.keys(EXERCISES).sort().map(e => {
+    const x = EXERCISES[e];
+    return `${e}: ${(x.aliases || []).join(", ")}`;
+  }).join("\n");
+}
+
+function scanPrompt(n) {
+  return [
+    `${n} photo(s) of gym equipment follow, in order: a machine nameplate, a QR-code`,
+    "landing page, or the machine itself. Identify the exercise in each.",
+    "",
+    "Existing exercise library (canonical name: aliases):",
+    libraryDigest(),
+    "",
+    `Valid muscle groups - nothing outside this list is allowed: ${MUSCLES.join(", ")}`,
+    "",
+    "Return ONLY a JSON array, one object per photo, in photo order:",
+    '{"photo": <0-based index>, "match": <canonical library name or null>,',
+    ' "name": <snake_case English name for a NEW entry, translated from the nameplate, or null>,',
+    ' "aliases": [<brand and model exactly as shown>, <the nameplate text as shown>],',
+    ' "muscles": [<prime movers ONLY>], "rep_range": [<floor>, <ceiling>],',
+    ' "increment_kg": <number or null>, "increment_source": "read" | "unknown",',
+    ' "bodyweight": <true|false>, "confidence": "high" | "low",',
+    ' "note": <one short line: what the plate says, and anything you could not read>}',
+    "",
+    "Rules:",
+    '- "match" only when the photo is clearly the SAME exercise already in the library.',
+    "  A plate-stack machine is NOT a match for a dumbbell or barbell version: dumbbell",
+    "  weight is per-dumbbell, stack weight is total, and one entry cannot carry both",
+    "  units. When in doubt propose a new entry.",
+    '- "increment_kg": ONLY when the plate increment is actually legible in the photo.',
+    '  Otherwise null and "unknown". Never infer it from what a stack usually is - a',
+    "  wrong increment silently corrupts every future load prescription for this lift.",
+    '- "muscles": prime movers only. Do not list a muscle that merely assists. Two',
+    "  entries only where a lift is genuinely co-primary.",
+    '- Not gym equipment: {"photo": i, "match": null, "name": null, "note": "<what it is>"}.',
+  ].join("\n");
+}
+
+async function identifyPhotos() {
+  if (!SAMPLE || !state.photos.length) return;
+  const max = SAMPLE_IMAGES.maxCount || 4;
+  const batch = state.photos.slice(0, max);
+  $("btn-identify").disabled = true;
+  showScanNote(`reading ${batch.length} photo${batch.length === 1 ? "" : "s"}…`);
+  try {
+    const out = await SAMPLE.json(scanPrompt(batch.length), {
+      images: batch.map(p => p.blob), modelTier: "complex",
+    });
+    const arr = Array.isArray(out) ? out : [out];
+    state.proposals = arr.map((r, i) => ({
+      ...r,
+      photoId: batch[r && Number.isInteger(r.photo) ? r.photo : i]?.id ?? batch[i]?.id,
+      sets: 3,
+      day: todayKey(),
+    }));
+    showScanNote(batch.length < state.photos.length
+      ? `${batch.length} of ${state.photos.length} read - this view allows ${max} per call.`
+      : "");
+  } catch (e) {
+    state.proposals = null;
+    showScanNote(e?.code === "rate_limited" ? "rate limited - try again in a minute"
+      : e?.code === "not_granted" ? "you declined - nothing was sent"
+      : `could not read the photos: ${e?.message || e}`, true);
+  }
+  $("btn-identify").disabled = false;
+  renderScan();
+}
+
+// A proposal becomes a lift only here, and an unread increment stays unread: the field
+// is empty and the row cannot be exported until a human types what the stack says.
+function acceptProposal(pr) {
+  const photo = state.photos.find(p => p.id === pr.photoId);
+  let key = pr.match && EXERCISES[pr.match] ? pr.match : null;
+  if (!key) {
+    if (!pr.name) return;
+    key = createProvisional(pr.name, {
+      aliases: pr.aliases, muscles: pr.muscles,
+      increment: pr.increment_source === "read" ? pr.increment_kg : null,
+      rep_range: Array.isArray(pr.rep_range) ? pr.rep_range : null,
+      bodyweight: !!pr.bodyweight, image: photo?.url || null,
+      note: pr.note || "", source: "photo",
+    });
+  }
+  if (!key) return;
+  ensureEditable();
+  state.routine.week[pr.day].plan.push({ exercise: key, sets: clamp(pr.sets, 1, 8) });
+  saveRoutine();
+  state.proposals = state.proposals.filter(x => x !== pr);
+  if (photo) state.photos = state.photos.filter(p => p.id !== photo.id);
+  renderPlan();
+  renderScan();
+}
+
+function renderScan() {
+  const on = !!SAMPLE;
+  $("scan-meta").textContent = on
+    ? "read on your Claude account"
+    : "no model here - use /scan";
+  $("btn-identify").hidden = !on || !state.photos.length;
+
+  $("scanqueue").innerHTML = state.photos.map(p =>
+    `<div class="qthumb"><img src="${p.url}" alt="${p.name}">
+       <button class="qdel" data-id="${p.id}" aria-label="Remove ${p.name}">&times;</button>
+     </div>`).join("");
+  for (const b of $("scanqueue").querySelectorAll(".qdel")) {
+    b.onclick = () => {
+      state.photos = state.photos.filter(p => p.id !== b.dataset.id);
+      state.proposals = null;
+      renderScan();
+    };
+  }
+
+  const props = state.proposals || [];
+  $("scanout").innerHTML = props.map((pr, i) => {
+    const photo = state.photos.find(p => p.id === pr.photoId);
+    if (!pr.match && !pr.name)
+      return `<div class="prop bad"><div class="prophead"><b>not equipment</b></div>
+        <p class="defnote">${pr.note || ""}</p></div>`;
+    const known = pr.match && EXERCISES[pr.match];
+    const read = pr.increment_source === "read" && typeof pr.increment_kg === "number";
+    return `<div class="prop" data-i="${i}">
+      <div class="prophead">
+        ${photo ? `<button class="thumb" data-role="preview" data-img="${photo.url}"
+            aria-label="Show photo"><img src="${photo.url}" alt=""></button>` : ""}
+        <span class="propname">${label(known ? pr.match : slug(pr.name || ""))}</span>
+        <span class="proptag ${known ? "known" : "new"}">${known ? "in library" : "new"}</span>
+      </div>
+      <div class="propmeta">${(pr.muscles || []).join(" · ") || "no muscles read"}
+        ${pr.confidence === "low" ? ' · <span class="lowconf">low confidence</span>' : ""}</div>
+      ${known ? "" : `<div class="propnums">
+        <label class="${read ? "" : "missing"}">increment kg
+          <input type="number" step="0.5" min="0" data-f="inc"
+                 value="${read ? pr.increment_kg : ""}" placeholder="?">
+        </label>
+        <label>reps
+          <input type="number" min="1" data-f="floor" value="${pr.rep_range?.[0] ?? ""}">
+          <span>&ndash;</span>
+          <input type="number" min="1" data-f="ceiling" value="${pr.rep_range?.[1] ?? ""}">
+        </label>
+      </div>`}
+      <p class="defnote">${pr.note || ""}${read ? "" :
+        known ? "" : "<br>The increment was not legible - read it off the stack."}</p>
+      <div class="propadd">
+        <select data-f="day">${DAYS.map(d =>
+          `<option value="${d}" ${d === pr.day ? "selected" : ""}>${d}</option>`).join("")}</select>
+        <div class="stepper">
+          <button data-f="less" aria-label="fewer sets">&minus;</button>
+          <span class="n">${pr.sets}</span>
+          <button data-f="more" aria-label="more sets">+</button>
+        </div>
+        <button class="primary" data-f="add">Add</button>
+        <button data-f="skip">Skip</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  for (const el of $("scanout").querySelectorAll(".prop[data-i]")) {
+    const pr = props[+el.dataset.i];
+    const q = (f) => el.querySelector(`[data-f="${f}"]`);
+    q("day").onchange = (e) => { pr.day = e.target.value; };
+    q("less").onclick = () => { pr.sets = clamp(pr.sets - 1, 1, 8); renderScan(); };
+    q("more").onclick = () => { pr.sets = clamp(pr.sets + 1, 1, 8); renderScan(); };
+    q("skip").onclick = () => {
+      state.proposals = state.proposals.filter(x => x !== pr); renderScan();
+    };
+    q("add").onclick = () => {
+      const inc = q("inc"), fl = q("floor"), ce = q("ceiling");
+      if (inc) {
+        const v = parseFloat(String(inc.value).replace(",", "."));
+        pr.increment_kg = Number.isFinite(v) && v > 0 ? v : null;
+        pr.increment_source = pr.increment_kg ? "read" : "unknown";
+        const f = parseFloat(fl.value), c = parseFloat(ce.value);
+        pr.rep_range = f > 0 && c >= f ? [f, c] : null;
+      }
+      acceptProposal(pr);
+    };
+    const t = el.querySelector('[data-role="preview"]');
+    if (t) t.onclick = () => openLightbox(t.dataset.img);
+  }
+}
+
+$("btn-pick").onclick = () => $("photos").click();
+$("photos").onchange = (e) => { addPhotos(e.target.files); e.target.value = ""; };
+for (const ev of ["dragenter", "dragover"])
+  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); });
+for (const ev of ["dragleave", "drop"])
+  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); });
+$("drop").addEventListener("drop", (e) => addPhotos(e.dataTransfer.files));
+$("btn-identify").onclick = identifyPhotos;
+
+// Resolves late and may never resolve at all - the page is built for its absence and
+// lights the feature up if and when the viewer can run it.
+(async () => {
+  try {
+    const s = await window.claude?.use?.("sample");
+    if (!s) return;
+    const lim = await s.limits().catch(() => null);
+    if (!lim?.images) return;
+    SAMPLE = s;
+    SAMPLE_IMAGES = lim.images;
+    $("photos").accept = lim.images.mediaTypes.join(",");
+    renderScan();
+  } catch { /* no viewer, no capability - the fallback copy is already rendered */ }
+})();
 
 // ------------------------------------------------------------ session I/O
 const csvRow = (s) =>
@@ -996,6 +1505,7 @@ $("btn-reset").onclick = () => {
 };
 
 // ----------------------------------------------------------------- start
+loadProvisional();   // before anything renders: the routine may name one of these
 loadRoutine();
 loadCommitted();
 loadSession();
@@ -1003,6 +1513,7 @@ selectTab("today");
 renderToday();
 renderTrends();
 renderPlan();
+renderScan();
 showFeedback(state.sets.length
   ? `<span class="hint">session restored: ${state.sets.length} sets</span>`
   : `<span class="l1">${routine().week[todayKey()].name}</span>\n` +

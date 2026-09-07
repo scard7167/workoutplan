@@ -144,7 +144,28 @@
         </div>
         <div class="progress" id="plan-summary"></div>
       </div>
+      <section class="card" id="scancard">
+        <div class="cardhead">
+          <h2>Photo dump</h2>
+          <span class="meta" id="scan-meta"></span>
+        </div>
+        <div class="drop" id="drop">
+          <input type="file" id="photos" accept="image/*" multiple hidden>
+          <button id="btn-pick">Add machine photos</button>
+          <button id="btn-identify" class="primary" hidden>Identify</button>
+          <p class="dropnote">
+            Nameplate, QR-code page, or the machine itself - one lift per photo. What
+            comes back is a proposal: nothing joins the plan until you press Add, and the
+            increment stays empty unless it was actually legible.
+          </p>
+        </div>
+        <div id="scanqueue"></div>
+        <div class="scannote" id="scan-note"></div>
+        <div id="scanout"></div>
+      </section>
+
       <div id="planweek"></div>
+      <datalist id="exlist"></datalist>
       <div class="actions">
         <button id="btn-yaml" class="primary">Export routine.yaml</button>
         <button id="btn-reset">Reset to file</button>
@@ -153,7 +174,12 @@
       <p class="fineprint">
         Edits live in this browser. Export and paste into <code>routine.yaml</code> to make
         them the plan of record - the CLI, the prescriptions and the volume bands all read
-        that file.
+        that file. The exercise field takes <b>free text</b>: a name the library knows
+        resolves to it, anything else becomes a lift of this browser's own. Such a lift is
+        planned but inert - no prescription, no logging - until its increment and rep range
+        are set, because those two numbers decide every load it will ever be given. Export
+        carries it out as an <code>exercises.yaml</code> stub, and refuses while any of it
+        is still blank.
       </p>
     </section>
   </main>

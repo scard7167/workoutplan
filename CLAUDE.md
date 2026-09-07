@@ -23,7 +23,7 @@ already loaded by the cardio; quads and calves are uncovered by design (see
 | `analyze.py` | all analytics: loader, volume, prescribe, progression, index, bridge, stalls, balance, adherence |
 | `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks - the example log is real output of the real rule, not hand-typed |
 | `log.example.csv` | 12 weeks of generated history so analytics have something to show before the first real session |
-| `web/` | phone-first prototype UI (Today / Trends / Plan). See `web/README` section below |
+| `web/` | phone-first prototype UI (Today / Trends / Plan). See **The web app** below |
 
 ## Schema
 
@@ -67,7 +67,8 @@ other way. `quads` and `calves` have no routine lift and are marked
 
 Editing the routine (in `routine.yaml` directly, or in the web app's Plan tab, exported
 and pasted back) requires asking first if it removes a muscle's only lift - the same
-bar as adding an exercise to the library.
+bar as adding an exercise to the library. A lift the Plan tab invented is *provisional*
+until that paste happens - see **The web app**.
 
 ## Progression rule - the only source of load prescriptions
 
@@ -184,6 +185,40 @@ recomputes a deep metric in JavaScript.
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
 
+## The web app
+
+`web/` is a static page - no server, no database. It renders `web/data.js` and
+`web/analytics.json`, both generated. It never recomputes a deep metric in JavaScript;
+the only arithmetic it does itself is the live session (today's volume, and the
+progression rule for a lift Python has not seen yet), against the same rule.
+
+Two copies exist and they are not equally capable:
+
+- the **published Artifact**, opened inside claude.ai, where `window.claude` grants the
+  page the `sample` capability - it can ask Claude, with images, on the viewer's account
+- **any other copy** (Vercel, `file://`), where there is no model behind the page at all
+
+Every model-backed feature must degrade to the second case, silently and by default.
+
+### Provisional exercises
+
+The Plan tab's exercise field takes free text, and the photo dump proposes machines from
+photos. Both can produce a lift that is not in `exercises.yaml`. Such a lift is
+**provisional**: it lives in `localStorage` under `strengthlog.provisional.v1`, in that
+browser and nowhere else.
+
+A provisional lift can be planned. It cannot be prescribed for and cannot be logged
+until it has `muscles`, `rep_range` and `increment`, because those decide every load it
+will ever be given - `prescribe()` returns `needs setup`, the weight boxes are disabled,
+and `Export routine.yaml` refuses outright rather than emit a routine `analyze.py` would
+reject. **`increment` is never guessed**, by the page or by the model reading the photo:
+it is filled in only where it was actually legible, and is otherwise left blank for a
+human. A wrong increment is silent and permanent; a refused export costs a minute.
+
+Export carries a provisional lift out as a commented `exercises.yaml` stub above the
+routine. Pasting both blocks is what makes it real - the same bar as any other library
+edit, and still a decision a human makes in the repo.
+
 ## Volume accounting
 
 `muscles` in `exercises.yaml` are **prime movers only**. A set credits 1 to each muscle
@@ -201,7 +236,10 @@ Lower-body bands are deliberately conservative because of the cycling.
   and never made silently or in bulk.
 - Never prescribe a load the progression rule does not produce.
 - Never add an exercise to `exercises.yaml`, or remove a muscle's only routine lift,
-  without asking first.
+  without asking first. A provisional lift in the web app is not an exception - it is
+  what asking looks like when there is no repo to hand.
+- Never guess an `increment`. Not in the library, not in a photo scan, not to unblock an
+  export. Read it off the machine or leave it blank.
 - If a metric is not built, **say so**. Never compute it ad hoc from the CSV - and if a
   new metric is added, it goes in `analyze.py` first, never only in `web/app.js`.
 - Never recommend more leg volume on the basis of this log alone. `quads` and `calves`

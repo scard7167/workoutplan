@@ -298,6 +298,115 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .addrow button { background: none; border: 1px dashed var(--line-2); color: var(--ink-2); border-radius: 6px;
   padding: 8px 11px; font: 400 12px var(--sans); cursor: pointer; width: 100%; }
 
+/* ---------------------------------------------- combobox + provisional */
+.exin {
+  min-width: 0; width: 100%; background: var(--panel-2); color: var(--ink);
+  border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 8px;
+  font: 400 13px var(--sans);
+}
+.exin:focus { border-color: var(--accent); outline: none; }
+.dayrow.unset .exin { border-color: var(--crit); }
+/* Its own line, not beside the name: on a 390px phone a chip in that row leaves the
+   exercise field about three characters wide. */
+.provtag {
+  grid-column: 1 / -1; margin-top: 7px; width: 100%; text-align: left;
+  appearance: none; cursor: pointer; border-radius: 4px; padding: 5px 7px;
+  font: 500 9px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); background: none; border: 1px solid var(--line-2);
+}
+.provtag.bad { color: var(--crit); border-color: var(--crit); }
+
+.exdef {
+  grid-column: 1 / -1; margin-top: 9px; padding: 11px 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line-2);
+}
+.exdef[hidden] { display: none; }
+.defthumb { float: right; width: 46px; height: 46px; margin: 0 0 8px 10px; cursor: zoom-in; }
+.deflab {
+  font: 500 9px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 7px;
+}
+.defmus { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 11px; }
+.mchip {
+  appearance: none; cursor: pointer; border-radius: 4px; padding: 5px 7px;
+  font: 400 10.5px/1 var(--mono); color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line);
+}
+.mchip.on { color: var(--ink); border-color: var(--accent); background: rgba(127,209,232,.1); }
+.defnums, .propnums { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.defnums label, .propnums label {
+  display: flex; align-items: center; gap: 5px;
+  font: 400 10.5px/1 var(--mono); color: var(--muted);
+}
+.defnums input[type="number"], .propnums input[type="number"] {
+  width: 62px; background: var(--panel); color: var(--ink); border: 1px solid var(--line-2);
+  border-radius: 6px; padding: 7px 6px; font: 500 15px var(--mono); text-align: center;
+}
+.defnums input:focus, .propnums input:focus { border-color: var(--accent); outline: none; }
+.propnums label.missing input { border-color: var(--crit); }
+.defbw { gap: 6px !important; }
+.defnote { margin: 10px 0 0; font: 400 10.5px/1.55 var(--sans); color: var(--muted); }
+.defnote b { color: var(--ink-2); font-weight: 400; }
+
+/* ------------------------------------------------------------ photo dump */
+#scancard { margin-bottom: 16px; }
+.drop {
+  border: 1px dashed var(--line-2); border-radius: 8px; padding: 14px;
+  display: flex; flex-wrap: wrap; gap: 9px; align-items: center;
+}
+.drop.over { border-color: var(--accent); background: rgba(127,209,232,.05); }
+.drop button {
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2);
+  border-radius: 8px; padding: 9px 13px; font: 500 13px var(--sans); cursor: pointer;
+}
+.drop button.primary { background: var(--accent); border-color: var(--accent); color: #0B1417; }
+.drop button[hidden] { display: none; }
+.dropnote { flex-basis: 100%; margin: 0; font: 400 10.5px/1.55 var(--sans); color: var(--muted); }
+.scannote { font: 400 11px/1.5 var(--mono); color: var(--muted); margin-top: 10px; }
+.scannote .err { color: var(--crit); }
+
+#scanqueue { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+#scanqueue:empty { margin-top: 0; }
+.qthumb { position: relative; width: 58px; height: 58px; }
+.qthumb img {
+  width: 100%; height: 100%; object-fit: cover; border-radius: 7px;
+  border: 1px solid var(--line-2); display: block;
+}
+.qdel {
+  position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%;
+  background: var(--panel); border: 1px solid var(--line-2); color: var(--ink-2);
+  font: 400 12px/1 var(--sans); cursor: pointer; padding: 0;
+}
+
+.prop {
+  margin-top: 11px; padding: 12px; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line-2);
+}
+.prop.bad { border-color: var(--line); }
+.prophead { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.propname { font: 500 14px/1.2 var(--sans); flex: 1; min-width: 0; }
+.proptag {
+  flex: none; font: 500 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  padding: 4px 5px; border-radius: 3px; border: 1px solid var(--line-2); color: var(--muted);
+}
+.proptag.new { color: var(--accent); border-color: var(--accent-d); }
+.propmeta { font: 400 11px/1.4 var(--mono); color: var(--ink-2); margin-bottom: 11px; }
+.lowconf { color: var(--warn); }
+.propadd { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 11px; }
+.propadd select {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line-2);
+  border-radius: 6px; padding: 8px; font: 400 13px var(--sans);
+}
+.propadd button {
+  background: var(--panel); border: 1px solid var(--line-2); color: var(--ink-2);
+  border-radius: 7px; padding: 8px 12px; font: 500 12.5px var(--sans); cursor: pointer;
+}
+.propadd button.primary { background: var(--accent); border-color: var(--accent); color: #0B1417; }
+.propadd .primary { margin-left: auto; }
+
+.why.needsetup { color: var(--crit); }
+.slotw:disabled { opacity: .4; cursor: not-allowed; }
+
 /* --------------------------------------------------------------- chrome */
 .actions { display: flex; gap: 9px; flex-wrap: wrap; }
 button.primary, .actions button {
