@@ -226,8 +226,13 @@ function renderToday() {
     const pips = Array.from({ length: Math.max(p.sets, n) }, (_, i) =>
       `<span class="pip ${i < n ? (i < p.sets ? "on" : "extra") : ""}"></span>`).join("");
     const cls = ["", n >= p.sets ? "done" : "", state.sticky === p.exercise ? "active" : ""].join(" ");
+    const img = EXERCISES[p.exercise]?.image;
+    const thumb = img
+      ? `<button class="thumb" data-img="${img}" aria-label="Show ${label(p.exercise)} photo">
+           <img src="${img}" alt="" loading="lazy"></button>`
+      : "";
     return `<li class="${cls}" data-ex="${p.exercise}" tabindex="0">
-      <span class="nm">${label(p.exercise)}</span>
+      <span class="nmwrap">${thumb}<span class="nm">${label(p.exercise)}</span></span>
       <span class="rx">${fmtW(rx.weight_kg, p.exercise)} &times; ${rx.target_reps}</span>
       <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}</span>
       <span class="pips">${pips}</span></li>`;
@@ -237,9 +242,25 @@ function renderToday() {
     const pick = () => { state.sticky = li.dataset.ex; renderToday(); showPrescription(li.dataset.ex); };
     li.onclick = pick;
     li.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+    const t = li.querySelector(".thumb");
+    if (t) {
+      t.onclick = (e) => { e.stopPropagation(); openLightbox(t.dataset.img); };
+      t.onkeydown = (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
+      };
+    }
   }
   $("hstate").textContent = `${state.date} · ${state.sets.length} sets`;
 }
+
+function openLightbox(src) {
+  $("lightbox-img").src = src;
+  $("lightbox").hidden = false;
+}
+function closeLightbox() { $("lightbox").hidden = true; $("lightbox-img").src = ""; }
+$("lightbox").onclick = closeLightbox;
+$("lightbox-close").onclick = (e) => { e.stopPropagation(); closeLightbox(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
 
 function showPrescription(exercise) {
   const p = prescribe(exercise);

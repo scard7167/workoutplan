@@ -6,7 +6,7 @@ cannot fetch sibling .js/.css. Everything else stays the same code.
 
     python3 web/build_artifact.py
 """
-import os, re, sys
+import base64, mimetypes, os, re, sys
 
 WEB = os.path.dirname(os.path.abspath(__file__))
 read = lambda n: open(os.path.join(WEB, n)).read()
@@ -18,6 +18,17 @@ body = body.replace('<script type="module" src="app.js"></script>', "").strip()
 app = read("app.js")
 app = re.sub(r'^import \{.*?\}\s*from "\./data\.js";\n', "", app, flags=re.M | re.S)
 data = re.sub(r"^export const ", "const ", read("data.js"), flags=re.M)
+
+# A bundled artifact is one file with no sibling files to fetch, unlike the deployed
+# site - so any exercise image referenced as "images/x.jpg" gets inlined as a data URI.
+def inline_image(m):
+    rel = m.group(1)
+    path = os.path.join(WEB, rel)
+    mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+    b64 = base64.b64encode(open(path, "rb").read()).decode("ascii")
+    return f'"image":"data:{mime};base64,{b64}"'
+
+data = re.sub(r'"image":"(images/[^"]+)"', inline_image, data)
 
 out = f"""<title>Strength Log</title>
 <style>

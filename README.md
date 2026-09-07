@@ -6,7 +6,8 @@ phone during the session.
 - `CLAUDE.md` is the operating manual - parsing rules, the progression rule, the feedback
   contract, the hard rules. Read that, not this.
 - `log.csv` is the append-only system of record (empty until the first session).
-- `log.example.csv` holds 3 seeded sessions so the analytics produce output on day zero.
+- `log.example.csv` holds 12 weeks of generated history so the analytics produce
+  output on day zero - real output of `prescribe()`, not hand-typed.
 
 ```
 /start          open a session
@@ -14,6 +15,8 @@ bench 80x8 @2   log a set (exercise is sticky afterwards)
 /end            validate, append to log.csv, 4-line summary
 /review         volume vs target bands, 7d and 14d
 /plan           next session, loads from the progression rule
+/scan           drop a photo of a gym machine - resolves it against the library,
+                or proposes a new entry and asks before adding it
 ```
 
 ```
@@ -41,8 +44,14 @@ python3 web/build_data.py
 python3 -m http.server 8000 -d web    # then open http://localhost:8000
 ```
 
+An exercise can carry an optional reference photo (`image:` in `exercises.yaml`,
+a file under `web/images/`) - shown as a small thumbnail next to it in Today, click to
+expand. Purely cosmetic, never read by `analyze.py`. `/scan` attaches these
+automatically when it identifies a machine from a photo.
+
 `web/build_artifact.py` bundles everything into one file (`web/artifact.html`, not
-tracked) for hosts that can't fetch sibling files, such as a Claude Artifact.
+tracked) for hosts that can't fetch sibling files, such as a Claude Artifact - any
+exercise photo is inlined as a base64 data URI in that build.
 
 The prototype does not write `log.csv`. Finish prints the rows the CLI would append.
 Session state and any plan edits live in `localStorage`, per browser.

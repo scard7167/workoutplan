@@ -27,8 +27,16 @@ log = [{"date": r["date"], "exercise": r["exercise"], "set_no": int(r["set_no"])
         "weight_kg": float(r["weight_kg"]), "reps": int(r["reps"]),
         "rir": (None if r["rir"] == "" else int(r["rir"])), "notes": r["notes"]}
        for r in rows]
+
+# image is optional and purely cosmetic - a relative path under web/. Fail loud if the
+# library declares one that isn't actually there, same as any other broken reference.
+for name, v in lib.items():
+    if "image" in v and not os.path.exists(os.path.join(ROOT, "web", v["image"])):
+        sys.exit(f"exercises.yaml: {name} image {v['image']!r} does not exist under web/")
+
 ex = {k: {"aliases": v["aliases"], "muscles": v["muscles"], "increment": v["increment"],
-          "rep_range": v["rep_range"], "bodyweight": bool(v.get("bodyweight"))}
+          "rep_range": v["rep_range"], "bodyweight": bool(v.get("bodyweight")),
+          **({"image": v["image"]} if "image" in v else {})}
       for k, v in lib.items()}
 
 EX_JSON = json.dumps(ex, separators=COMPACT)

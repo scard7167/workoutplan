@@ -10,6 +10,14 @@
 # bodyweight: true  -> weight_kg is ADDED load only. Bodyweight-only sets are logged
 #             as 0. e1RM is not meaningful for these sets and analytics exclude them
 #             from e1RM trends; progress on them is tracked by reps until load is added.
+# image:      OPTIONAL. Path to a reference photo, relative to web/ (e.g.
+#             images/bench_press.jpg). Purely cosmetic - lets the web app show a small
+#             thumbnail next to the exercise so a specific machine is recognisable at a
+#             glance; never read by analyze.py or the progression rule. Attaching one to
+#             an exercise that already exists is not a library change under the hard
+#             rules below - only adding a new exercise entry or touching muscles/
+#             increment/rep_range is. web/build_data.py fails loud if the path is
+#             declared but the file is missing.
 #
 # Adding a lift here requires asking first. See CLAUDE.md, hard rules.
 

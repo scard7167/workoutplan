@@ -17,7 +17,10 @@ of the deployed web prototype, which is static JS with no model behind it.
    `incline_db_press`'s machine cousin, not a match to it: DB weight is per-dumbbell,
    machine weight is total stack. Do not conflate the two units under one exercise).
    - **Match found** -> report the canonical name, then `swap to` it (sticky, same as
-     typing `swap to X`) so logging can continue immediately. Say the match and stop.
+     typing `swap to X`) so logging can continue immediately. If that exercise has no
+     `image` yet, save this photo as its reference image (see step 5) and say so in one
+     line - this is cosmetic, not a library change, so it does not need confirmation.
+     Say the match and stop.
    - **No match** -> propose a new entry: canonical `snake_case` name, `aliases`
      (include the brand+model exactly as shown, since that is what the QR code will
      show again), `muscles` (only what's actually a prime mover - don't invent
@@ -33,10 +36,17 @@ of the deployed web prototype, which is static JS with no model behind it.
      replaces an existing lift there or adds to it (adding changes that muscle's
      weekly volume and its band in `config.yaml`, since bands are derived from the
      routine)
-4. On confirmation: add the entry, run `python3 analyze.py validate` to confirm the
-   library and routine still parse, and say what changed in one line. If it was added
-   to `routine.yaml`, note that `python3 web/build_data.py` needs a re-run before the
-   web app reflects it.
+4. On confirmation: add the entry, save the reference photo (step 5), run
+   `python3 analyze.py validate` to confirm the library and routine still parse, and say
+   what changed in one line. If it was added to `routine.yaml`, note that
+   `python3 web/build_data.py` needs a re-run before the web app reflects it.
+5. **Saving the reference photo.** Crop to the machine/equipment itself (not surrounding
+   UI chrome), resize so the long edge is ~480px, save as JPEG quality ~78 under
+   `web/images/<exercise>.jpg`, and set `image: images/<exercise>.jpg` on that exercise's
+   entry in `exercises.yaml`. This field is purely cosmetic - the web app shows it as a
+   small thumbnail next to the lift, click to expand - and is never read by `analyze.py`
+   or the progression rule. `web/build_data.py` fails loud if the path doesn't resolve,
+   so a bad crop/save shows up immediately on the next rebuild, not silently.
 
 Never invent a canonical name that isn't in the library and log a set against it
 mid-session - resolve or ask first, per the parsing rules in CLAUDE.md.
