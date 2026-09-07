@@ -3,9 +3,17 @@
 //
 // Division of labour: every DEEP number (trend slopes, strength index, the volume-load
 // bridge, stalls, balance, adherence) is computed once by analyze.py and shipped in
-// ANALYTICS. This file renders those. Only the live session - parsing a set, counting
-// today's volume, and prescribing the next load for a lift the plan has just added -
-// is computed here, against the same rule.
+// ANALYTICS. This file renders those. Only the live session - counting today's volume
+// and prescribing the next load for a lift the plan has just added - is computed here,
+// against the same rule.
+//
+// Today logs WEIGHT ONLY, against set slots the Plan tab already fixed the count of -
+// there is no exercise name or set-count to type or parse. Every logged row still
+// carries reps and rir (the schema and the progression rule need both), but since
+// neither is asked for, they are always the prescribed target reps and a blank RIR -
+// this session can no longer tell "hit the target" from "missed it," so a deload can
+// never be triggered from a Today-logged set. That trade is deliberate, made once here,
+// not something to silently work around elsewhere.
 import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE, ANALYTICS, SEED_LOG }
   from "./data.js";
 
@@ -17,18 +25,10 @@ const STORE_ROUTINE = "strengthlog.routine.v1";
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-const ALIASES = (() => {
-  const pairs = [];
-  for (const [name, ex] of Object.entries(EXERCISES)) {
-    pairs.push([name.toLowerCase(), name], [name.replace(/_/g, " "), name]);
-    for (const a of ex.aliases) pairs.push([a.toLowerCase().trim(), name]);
-  }
-  return pairs.sort((a, b) => b[0].length - a[0].length);
-})();
-
 const state = {
   date: new Date().toISOString().slice(0, 10),
   sets: [],
+  extraSlots: {},    // {exercise: N} - off-plan sets added this session, past the plan's count
   sticky: null,
   window: 7,
   lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
@@ -38,69 +38,6 @@ const state = {
 const routine = () => state.routine || ROUTINE;
 const todayKey = () => DAYS[(new Date().getDay() + 6) % 7];
 const label = (e) => e.replace(/_/g, " ");
-
-// ------------------------------------------------------------------ parsing
-function resolve(t) {
-  t = t.toLowerCase().trim();
-  for (const [a, n] of ALIASES) if (a === t) return n;
-  return null;
-}
-function splitExercise(s) {
-  for (const [a, n] of ALIASES) {
-    if (s === a) return { exercise: n, rest: "" };
-    if (s.startsWith(a + " ")) return { exercise: n, rest: s.slice(a.length).trim() };
-  }
-  return { exercise: null, rest: s };
-}
-
-function parse(raw) {
-  const s = raw.trim().toLowerCase().replace(/\s+/g, " ");
-  if (!s) return { error: "empty" };
-  if (s === "undo") return { undo: true };
-  if (s === "/end" || s === "end") return { end: true };
-  const swap = s.match(/^swap to (.+)$/);
-  if (swap) {
-    const n = resolve(swap[1]);
-    return n ? { sticky: n } : { error: `unknown exercise: ${swap[1]}` };
-  }
-
-  let { exercise, rest } = splitExercise(s);
-  if (exercise && rest === "") return { sticky: exercise };
-  if (!exercise) exercise = state.sticky;
-  if (!exercise) return { error: `name the exercise first (unknown: ${s.split(" ")[0]})` };
-  const ex = EXERCISES[exercise];
-
-  let at = null;
-  const atM = rest.match(/@\s*(\d+(?:[.,]\d+)?)\s*$/);
-  if (atM) { at = parseFloat(atM[1].replace(",", ".")); rest = rest.slice(0, atM.index).trim(); }
-
-  let weight, reps, count = 1, rir = null;
-  const bw = rest.match(/^bw\s*(?:x\s*)?(\d+)$/);
-  const pair = rest.match(/^(\+)?(\d+(?:[.,]\d+)?)\s*x\s*(\d+)$/);
-
-  if (bw) {
-    if (!ex.bodyweight) return { error: `${exercise} is not a bodyweight exercise` };
-    weight = 0; reps = parseInt(bw[1], 10); rir = at;
-  } else if (pair) {
-    const plus = !!pair[1];
-    const a = parseFloat(pair[2].replace(",", ".")), b = parseInt(pair[3], 10);
-    if (at === null) { weight = a; reps = b; }
-    else if (at > 4) { count = a; reps = b; weight = at; }
-    else if (plus || a > 4 || !Number.isInteger(a)) { weight = a; reps = b; rir = at; }
-    else return { ask: `${a}x${b} @${at}: ${a} kg at RIR ${at}, or ${a} sets of ${b} at ${at} kg?` };
-    if (!Number.isInteger(count) || count < 1) return { error: `${count} is not a set count` };
-  } else {
-    return { error: `cannot parse "${raw.trim()}"` };
-  }
-
-  if (!Number.isInteger(reps) || reps < 1) return { error: `reps ${reps} is not a positive integer` };
-  if (weight < 0) return { error: `weight ${weight} is negative` };
-  if (weight === 0 && !ex.bodyweight) return { error: `weight 0 but ${exercise} is not bodyweight` };
-  if (rir !== null && (!Number.isInteger(rir) || rir < 0 || rir > 4))
-    return { error: `rir ${rir} is not 0-4` };
-
-  return { sets: Array.from({ length: count }, () => ({ exercise, weight_kg: weight, reps, rir })) };
-}
 
 // --------------------------------------------------- the progression rule
 const roundDown = (kg, inc) => Math.floor((kg + 1e-9) / inc) * inc;
@@ -138,10 +75,10 @@ function prescribeJS(exercise) {
 }
 const prescribe = (e) => ANALYTICS.prescriptions[e] || prescribeJS(e);
 
+// The weight just logged, paired with the target reps for another set of it today.
+// No deload branch here: that needs an actual rep/RIR miss, and Today only logs
+// weight - every row's reps is already the prescribed target, never a real shortfall.
 function nextSet(just) {
-  const ex = EXERCISES[just.exercise];
-  const [floor] = ex.rep_range;
-  if (just.reps < floor && just.rir === 0) return deload(just.weight_kg, ex, floor);
   return { weight_kg: just.weight_kg, target_reps: prescribe(just.exercise).target_reps,
            reason: "hold" };
 }
@@ -198,10 +135,18 @@ function sparkline(values, w = 120, h = 26) {
 }
 
 // ------------------------------------------------------------- TODAY view
-function planFor(day) { return routine().week[day].plan; }
-
+// Weight-only logging. Each exercise gets exactly `p.sets` input boxes - the count the
+// Plan tab set, nothing typed here changes it - plus one more for every tap of "+" this
+// session (state.extraSlots, session-local, never written back to routine.yaml: an
+// off-plan set today isn't a permanent change to the plan). A slot's position IS its
+// set_no; clearing one un-logs that set without renumbering its neighbours.
 function loggedFor(exercise) {
   return state.sets.filter(s => s.exercise === exercise).length;
+}
+
+function slotCount(p) {
+  const extra = state.extraSlots[p.exercise] || 0;
+  return Math.max(p.sets + extra, loggedFor(p.exercise));
 }
 
 function renderToday() {
@@ -223,25 +168,42 @@ function renderToday() {
   $("today-plan").innerHTML = plan.map(p => {
     const rx = prescribe(p.exercise);
     const n = loggedFor(p.exercise);
-    const pips = Array.from({ length: Math.max(p.sets, n) }, (_, i) =>
-      `<span class="pip ${i < n ? (i < p.sets ? "on" : "extra") : ""}"></span>`).join("");
     const cls = ["", n >= p.sets ? "done" : "", state.sticky === p.exercise ? "active" : ""].join(" ");
     const img = EXERCISES[p.exercise]?.image;
     const thumb = img
       ? `<button class="thumb" data-img="${img}" aria-label="Show ${label(p.exercise)} photo">
            <img src="${img}" alt="" loading="lazy"></button>`
       : "";
-    return `<li class="${cls}" data-ex="${p.exercise}" tabindex="0">
-      <span class="nmwrap">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-      <span class="rx">${fmtW(rx.weight_kg, p.exercise)} &times; ${rx.target_reps}</span>
+    const placeholder = fmtW(rx.weight_kg, p.exercise);
+    const slots = Array.from({ length: slotCount(p) }, (_, i) => {
+      const setNo = i + 1;
+      const logged = state.sets.find(s => s.exercise === p.exercise && s.set_no === setNo);
+      return `<div class="slot ${logged ? "filled" : ""}">
+        <span class="slotn">${setNo}</span>
+        <input type="text" inputmode="decimal" class="slotw" data-ex="${p.exercise}" data-set="${setNo}"
+               placeholder="${placeholder}" value="${logged ? +logged.weight_kg : ""}"
+               aria-label="${label(p.exercise)} set ${setNo} weight">
+      </div>`;
+    }).join("");
+    return `<li class="${cls}" data-ex="${p.exercise}">
+      <div class="rowtop">
+        <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
+        <span class="rx">${placeholder} &times; ${rx.target_reps}</span>
+      </div>
       <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}</span>
-      <span class="pips">${pips}</span></li>`;
+      <div class="slots">${slots}
+        <button class="addslot" data-role="add" data-ex="${p.exercise}" aria-label="add a set">+</button>
+      </div></li>`;
   }).join("");
 
   for (const li of $("today-plan").querySelectorAll("li")) {
-    const pick = () => { state.sticky = li.dataset.ex; renderToday(); showPrescription(li.dataset.ex); };
-    li.onclick = pick;
-    li.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } };
+    const ex = li.dataset.ex;
+    li.querySelector('[data-role="preview"]').onclick = (e) => {
+      if (e.target.closest(".thumb")) return;
+      state.sticky = ex; showPrescription(ex);
+      for (const other of $("today-plan").querySelectorAll("li")) other.classList.remove("active");
+      li.classList.add("active");
+    };
     const t = li.querySelector(".thumb");
     if (t) {
       t.onclick = (e) => { e.stopPropagation(); openLightbox(t.dataset.img); };
@@ -249,8 +211,63 @@ function renderToday() {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
       };
     }
+    li.querySelector('[data-role="add"]').onclick = () => {
+      state.extraSlots[ex] = (state.extraSlots[ex] || 0) + 1;
+      saveSession(); renderToday();
+    };
+    for (const input of li.querySelectorAll(".slotw")) {
+      // No focus-preview here: the row's "rx" text already shows the prescribed
+      // weight/reps at a glance, and firing showPrescription() on focus would
+      // overwrite the commit feedback the moment focus moves to the next slot.
+      input.onblur = () => commitSlot(ex, +input.dataset.set, input.value);
+      input.onkeydown = (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        // blur() commits synchronously, which re-renders the whole row and detaches
+        // every node in it - a reference grabbed before blur() is already stale by the
+        // time it returns, so the next input has to be looked up fresh afterwards.
+        const nextSet = +input.dataset.set + 1;
+        input.blur();
+        document.querySelector(`.slotw[data-ex="${ex}"][data-set="${nextSet}"]`)?.focus();
+      };
+    }
   }
   $("hstate").textContent = `${state.date} · ${state.sets.length} sets`;
+}
+
+// A slot's position IS its set_no - clearing it removes that logged row without
+// shifting any other slot. Reps and RIR are never asked for: reps is always the
+// current prescribed target, RIR is always blank. See the file header for why.
+function commitSlot(exercise, setNo, raw) {
+  const trimmed = raw.trim();
+  const existing = state.sets.findIndex(s => s.exercise === exercise && s.set_no === setNo);
+
+  if (trimmed === "") {
+    if (existing === -1) return;
+    const [dropped] = state.sets.splice(existing, 1);
+    saveSession(); renderToday();
+    return showFeedback(`<span class="l1">cleared ${label(exercise)} s${setNo}</span>\n` +
+      `<span class="hint">was ${fmtSet(dropped)}</span>`);
+  }
+
+  const ex = EXERCISES[exercise];
+  const weight = parseFloat(trimmed.replace(",", "."));
+  if (!Number.isFinite(weight) || weight < 0) {
+    renderToday();
+    return showFeedback(`<span class="err">? "${raw}" is not a valid weight</span>`);
+  }
+  if (weight === 0 && !ex.bodyweight) {
+    renderToday();
+    return showFeedback(`<span class="err">? weight 0 but ${label(exercise)} is not bodyweight</span>`);
+  }
+
+  const row = { exercise, set_no: setNo, weight_kg: weight,
+                reps: prescribe(exercise).target_reps, rir: null };
+  if (existing === -1) state.sets.push(row); else state.sets[existing] = row;
+  state.sticky = exercise;
+  showFeedback(feedback(row));
+  renderToday();
+  saveSession();
 }
 
 function openLightbox(src) {
@@ -650,37 +667,6 @@ function exportYaml() {
 }
 
 // ------------------------------------------------------------ session I/O
-function nextSetNo(exercise) { return loggedFor(exercise) + 1; }
-
-function submit(raw) {
-  const r = parse(raw);
-  if (r.error) return showFeedback(`<span class="err">? ${r.error}</span>`);
-  if (r.ask) return showFeedback(`<span class="err">? ${r.ask}</span>`);
-  if (r.undo) return undo();
-  if (r.end) return showCsv();
-  if (r.sticky) { state.sticky = r.sticky; renderToday(); return showPrescription(r.sticky); }
-
-  let last = null;
-  for (const s of r.sets) {
-    const row = { ...s, set_no: nextSetNo(s.exercise) };
-    state.sets.push(row);
-    last = row;
-  }
-  state.sticky = last.exercise;
-  showFeedback(feedback(last));
-  renderToday();
-  saveSession();
-}
-
-function undo() {
-  const dropped = state.sets.pop();
-  renderToday(); saveSession();
-  showFeedback(dropped
-    ? `<span class="l1">dropped ${label(dropped.exercise)} s${dropped.set_no} ${fmtSet(dropped)}</span>\n` +
-      `<span class="hint">${state.sets.length} sets left</span>`
-    : `<span class="err">? nothing to undo</span>`);
-}
-
 function showCsv() {
   const out = $("csvout");
   if (!state.sets.length) { out.hidden = true; return showFeedback(`<span class="err">? no open session</span>`); }
@@ -700,7 +686,7 @@ function showFeedback(html) { $("feedback").innerHTML = html; }
 
 function saveSession() {
   try { localStorage.setItem(STORE_SESSION, JSON.stringify(
-    { date: state.date, sets: state.sets, sticky: state.sticky })); }
+    { date: state.date, sets: state.sets, sticky: state.sticky, extraSlots: state.extraSlots })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -710,6 +696,7 @@ function loadSession() {
     const d = JSON.parse(raw);
     if (d && d.date === state.date && Array.isArray(d.sets)) {
       state.sets = d.sets; state.sticky = d.sticky || null;
+      state.extraSlots = d.extraSlots && typeof d.extraSlots === "object" ? d.extraSlots : {};
     }
   } catch { /* ignore */ }
 }
@@ -720,21 +707,17 @@ function selectTab(name) {
     $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
     $(`p-${t}`).hidden = t !== name;
   }
-  $("composer").style.display = name === "today" ? "flex" : "none";
 }
 for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
 
-$("btn-log").onclick = () => { const i = $("input"); if (i.value.trim()) { submit(i.value); i.value = ""; } i.focus(); };
-$("btn-undo").onclick = () => { undo(); $("input").focus(); };
 $("btn-end").onclick = showCsv;
 $("btn-clear").onclick = () => {
   if (!state.sets.length || confirm("Discard the open session? Nothing has been written to log.csv.")) {
-    state.sets = []; state.sticky = null; $("csvout").hidden = true;
+    state.sets = []; state.sticky = null; state.extraSlots = {}; $("csvout").hidden = true;
     renderToday(); showFeedback(`<span class="hint">session discarded</span>`);
     saveSession();
   }
 };
-$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-log").click(); });
 
 for (const b of document.querySelectorAll("#volseg button")) {
   b.onclick = () => {
@@ -760,9 +743,8 @@ selectTab("today");
 renderToday();
 renderTrends();
 renderPlan();
-const opener = ANALYTICS.stalls[0];
 showFeedback(state.sets.length
   ? `<span class="hint">session restored: ${state.sets.length} sets</span>`
   : `<span class="l1">${routine().week[todayKey()].name}</span>\n` +
     `<span class="l2">${ANALYTICS.sessions.length} sessions logged · last ${ANALYTICS.last_logged}</span>\n` +
-    `<span class="hint">tap a lift, or type ${opener ? `"${label(opener.exercise)}"` : "an exercise"} to start</span>`);
+    `<span class="hint">tap into a set box and enter the weight</span>`);

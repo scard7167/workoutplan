@@ -52,6 +52,8 @@
         Prototype: the session lives in this browser. Nothing is written to
         <code>log.csv</code> - Finish prints the rows the CLI appends. Loads come from the
         double-progression rule in <code>config.yaml</code>, never from anywhere else.
+        Weight only - reps are always the target shown, RIR is always blank, so a deload
+        can't trigger from what's logged here.
       </p>
     </section>
 
@@ -137,12 +139,6 @@
     <img id="lightbox-img" src="" alt="">
   </div>
 
-  <div class="composer" id="composer">
-    <input id="input" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-           placeholder="80x8 @2" aria-label="log a set">
-    <button id="btn-log" class="primary">Log</button>
-    <button id="btn-undo" aria-label="undo last set">Undo</button>
-  </div>
 </div>
 <script type="module" src="app.js"></script>
 </body>

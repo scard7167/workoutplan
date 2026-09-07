@@ -48,7 +48,8 @@ nav button {
 }
 nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 
-main { flex: 1; padding: 18px 16px 28px; display: flex; flex-direction: column; gap: 16px; }
+main { flex: 1; padding: 18px 16px calc(28px + env(safe-area-inset-bottom));
+       display: flex; flex-direction: column; gap: 16px; }
 .panel { display: contents; }
 .panel[hidden] { display: none; }
 
@@ -65,13 +66,11 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 /* ------------------------------------------------------------- plan rows */
 .plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
         background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
-.plan li {
-  background: var(--panel); padding: 12px 14px; display: grid; gap: 3px 12px; cursor: pointer;
-  grid-template-columns: 1fr auto; align-items: baseline;
-}
+.plan li { background: var(--panel); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
 .plan li.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
 .plan li.done { color: var(--muted); }
-.plan .nmwrap { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.rowtop { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.plan .nmwrap { display: flex; align-items: center; gap: 9px; min-width: 0; cursor: pointer; }
 .plan .nm { font: 500 15px/1.25 var(--sans); }
 .plan li.done .nm { color: var(--ink-2); }
 .thumb {
@@ -93,14 +92,27 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
   background: var(--panel); border: 1px solid var(--line-2); color: var(--ink);
   font: 400 20px/1 var(--sans); cursor: pointer;
 }
-.plan .rx { font: 600 15px/1.2 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.plan .rx { font: 600 15px/1.2 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
 .plan .why { font: 400 11px/1.3 var(--mono); color: var(--muted); letter-spacing: .01em; }
 .plan .why.progress { color: var(--good); }
 .plan .why.deload { color: var(--crit); }
-.plan .pips { display: flex; gap: 4px; justify-content: flex-end; }
-.pip { width: 15px; height: 5px; border-radius: 2px; background: var(--line-2); }
-.pip.on { background: var(--accent); }
-.pip.extra { background: var(--warn); }
+
+.slots { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.slot { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.slotn { font: 500 9px/1 var(--mono); color: var(--muted); letter-spacing: .04em; }
+.slotw {
+  width: 54px; height: 40px; text-align: center; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink);
+  font: 600 16px var(--mono); font-variant-numeric: tabular-nums;   /* 16px stops iOS zoom on focus */
+}
+.slotw::placeholder { color: var(--muted); font-weight: 400; }
+.slotw:focus { border-color: var(--accent); outline: none; }
+.slot.filled .slotw { border-color: var(--accent-d); background: rgba(127,209,232,.08); }
+.addslot {
+  width: 38px; height: 38px; margin-top: 15px; border-radius: 8px; border: 1px dashed var(--line-2);
+  background: none; color: var(--muted); font: 400 17px/1 var(--sans); cursor: pointer; flex: none;
+}
+.addslot:hover { color: var(--ink-2); border-color: var(--line-2); }
 
 /* -------------------------------------------------------------- feedback */
 .feedback {
@@ -248,17 +260,3 @@ button.primary, .actions button {
 .fineprint code, .legend code { font: 400 11px var(--mono); color: var(--ink-2); }
 .empty { font: 400 12.5px/1.5 var(--sans); color: var(--muted); }
 
-.composer {
-  position: sticky; bottom: 0; z-index: 30; background: var(--ground);
-  border-top: 1px solid var(--line); display: flex; gap: 8px;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
-}
-.composer input {
-  flex: 1; min-width: 0; background: var(--panel); color: var(--ink);
-  border: 1px solid var(--line-2); border-radius: 8px; padding: 12px;
-  font: 400 16px var(--mono);   /* 16px stops iOS zooming on focus */
-}
-.composer input::placeholder { color: var(--muted); }
-.composer button { border-radius: 8px; padding: 0 15px; font: 500 14px var(--sans); cursor: pointer;
-  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--ink-2); }
-.composer button.primary { background: var(--accent); border-color: var(--accent); color: #0B1417; }
