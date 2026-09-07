@@ -172,8 +172,10 @@ recomputes a deep metric in JavaScript.
   covariance term that makes the identity exact; the residual is asserted to zero and
   the run fails loud if it is not.
 - `python3 analyze.py stalls` - no e1RM PR in `analysis.stall_days` days, or a negative
-  short-window slope. One action per flag, always something the progression rule itself
-  can produce - never more leg volume.
+  short-window slope. A deload re-bases the window: performance is judged only against
+  sessions since the most recent one, never against a load tier already proven
+  unsustainable. One action per flag, always something the progression rule itself can
+  produce - never more leg volume.
 - `python3 analyze.py balance` - push:pull, quad:hamstring, upper:lower vs
   `balance_bands`
 - `python3 analyze.py adherence` - planned sets (from routine.yaml) vs logged, over

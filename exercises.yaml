@@ -161,3 +161,54 @@ cable_crunch:
   muscles: [core]
   increment: 2.5
   rep_range: [10, 15]
+
+incline_chest_press_machine:
+  # gym80 Sygnum 3023N "Schragbank" - plate-stack incline press, NOT incline_db_press:
+  # that's per-dumbbell, this is total stack weight. Different unit, different lift.
+  aliases: [gym80 3023n, schragbank, sygnum incline press, incline chest machine,
+            incline machine press]
+  muscles: [chest]
+  increment: 5   # UNVERIFIED - Sygnum stack increment assumed at the commercial-machine
+                 # default. Read the actual plate/pin spacing off the machine and correct
+                 # this before trusting a prescribed load on it.
+  rep_range: [8, 12]
+  image: images/incline_chest_press_machine.jpg
+
+standing_chest_press_machine:
+  # gym80 Sygnum 3121 "Brustmaschine stehend" - standing plate-stack chest press.
+  aliases: [gym80 3121, brustmaschine stehend, standing chest press, standing chest
+            machine, standing chest press machine]
+  muscles: [chest]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/standing_chest_press_machine.jpg
+
+lateral_raise_machine:
+  # gym80 Sygnum 3050 "Seithebemaschine" - plate-stack lateral raise, independent arms.
+  # Not the same unit as lateral_raise (DB) or cable_lateral_raise.
+  aliases: [gym80 3050, seithebemaschine, side raise machine, lateral raise machine,
+            machine lateral raise]
+  muscles: [side_delts]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [12, 18]
+  image: images/lateral_raise_machine.jpg
+
+dip_machine:
+  # gym80 Sygnum 3036 "Dipmaschine" - plate-stack dip press. The product page credits
+  # this to triceps only ("Training des Trizeps"), unlike the bodyweight `dip` entry
+  # (chest+triceps) - trust what the machine states, don't assume co-primary chest.
+  aliases: [gym80 3036, dipmaschine, dip machine, machine dip, triceps dip machine]
+  muscles: [triceps]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 15]
+  image: images/dip_machine.jpg
+
+overhead_triceps_machine:
+  # gym80 Sygnum 3095 "Trizeps Uberkopf" - plate-stack overhead extension. Not the same
+  # unit as overhead_triceps_extension (its "skullcrusher" alias is free-weight/EZ-bar).
+  aliases: [gym80 3095, trizeps uberkopf, "trizeps \u00fcberkopf", overhead triceps
+            machine, triceps overhead machine]
+  muscles: [triceps]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 15]
+  image: images/overhead_triceps_machine.jpg

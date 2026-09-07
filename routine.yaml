@@ -28,15 +28,21 @@ lifts:
   - triceps_pushdown
   - romanian_deadlift
   - hanging_leg_raise
+  - incline_chest_press_machine
+  - standing_chest_press_machine
+  - lateral_raise_machine
+  - dip_machine
+  - overhead_triceps_machine
 
 week:
   mon:
-    name: press + row
+    name: chest + triceps (gym80)
     plan:
-      - {exercise: bench_press, sets: 3}
-      - {exercise: chest_supported_row, sets: 3}
-      - {exercise: lateral_raise, sets: 3}
-      - {exercise: triceps_pushdown, sets: 2}
+      - {exercise: incline_chest_press_machine, sets: 3}
+      - {exercise: standing_chest_press_machine, sets: 3}
+      - {exercise: lateral_raise_machine, sets: 3}
+      - {exercise: dip_machine, sets: 2}
+      - {exercise: overhead_triceps_machine, sets: 2}
   tue:
     name: pull + overhead
     plan:

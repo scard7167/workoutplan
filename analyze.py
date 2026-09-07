@@ -627,6 +627,12 @@ def detect_stalls(rows: list[Set], lib: dict, cfg: dict) -> list[dict]:
     Severity: "watch" for (a) alone, "stalled" for (a)+(b), "regressing" for (b) with the
     latest best below the window median. The action is chosen deterministically and can
     only ever be something the progression rule can produce - never more leg volume.
+
+    A deload re-bases the comparison. The progression rule itself resets target reps to
+    floor after one - a legitimate lower-load restart, not a failure to sustain the old
+    load - so judging current performance against a pre-deload median or "best" compares
+    it to a load tier already proven unsustainable. If the most recent deload for this
+    exercise falls inside the trend window, only sessions from that point on are used.
     """
     an = cfg["analysis"]
     out = []
@@ -638,6 +644,12 @@ def detect_stalls(rows: list[Set], lib: dict, cfg: dict) -> list[dict]:
         end = dt.date.fromisoformat(pts[-1]["date"])
         win = [p for p in pts
                if dt.date.fromisoformat(p["date"]) >= end - dt.timedelta(weeks=an["trend_weeks"])]
+        floor = lib[exercise]["rep_range"][0]
+        deload_dates = {s.date for s in rows
+                        if s.exercise == exercise and s.reps < floor and s.rir == 0}
+        if deload_dates:
+            last_deload = max(deload_dates)
+            win = [p for p in win if dt.date.fromisoformat(p["date"]) > last_deload]
         if len(win) < an["stall_sessions"]:
             continue
         cutoff = end - dt.timedelta(days=an["stall_days"])

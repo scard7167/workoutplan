@@ -31,6 +31,9 @@ START_LOAD = {
     "overhead_press": 45.0, "lateral_raise": 10.0, "face_pull": 22.5,
     "barbell_curl": 30.0, "triceps_pushdown": 27.5, "romanian_deadlift": 80.0,
     "hanging_leg_raise": 0.0,
+    "incline_chest_press_machine": 55.0, "standing_chest_press_machine": 60.0,
+    "lateral_raise_machine": 30.0, "dip_machine": 45.0,
+    "overhead_triceps_machine": 35.0,
 }
 DELOAD_WEEK = 6           # a planned easy week - real training has them
 DECLINE = [0.0, 1.1, 2.0, 2.8]     # reps lost on set 2, 3, 4 relative to the top set

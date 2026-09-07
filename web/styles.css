@@ -72,7 +72,7 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .plan li.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
 .plan li.done { color: var(--muted); }
 .plan .nmwrap { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.plan .nm { font: 500 15px/1.2 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan .nm { font: 500 15px/1.25 var(--sans); }
 .plan li.done .nm { color: var(--ink-2); }
 .thumb {
   flex: none; width: 34px; height: 34px; padding: 0; border-radius: 7px; overflow: hidden;

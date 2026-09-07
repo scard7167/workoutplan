@@ -20,14 +20,14 @@ athlete:
 # volume report labels them UNCOVERED rather than RED. Do not "fix" this by adding leg
 # work on the basis of this log.
 volume_targets:
-  chest:        {min: 7,  target: 9,  max: 12}
-  lats:         {min: 13, target: 17, max: 21}
-  upper_back:   {min: 6,  target: 8,  max: 11}
+  chest:        {min: 10, target: 12, max: 16}
+  lats:         {min: 10, target: 14, max: 18}
+  upper_back:   {min: 3,  target: 5,  max: 8}
   front_delts:  {min: 4,  target: 6,  max: 8}
   side_delts:   {min: 10, target: 12, max: 16}
   rear_delts:   {min: 6,  target: 8,  max: 11}
   biceps:       {min: 5,  target: 6,  max: 9}
-  triceps:      {min: 5,  target: 6,  max: 9}
+  triceps:      {min: 7,  target: 8,  max: 11}
   quads:        {min: 0,  target: 0,  max: 6}
   hamstrings:   {min: 4,  target: 6,  max: 8}
   glutes:       {min: 4,  target: 6,  max: 8}
@@ -74,6 +74,7 @@ analysis:
 
 balance_bands:
   # Set-count ratios over the rolling 7-day window.
-  push_pull:      {min: 0.5, max: 1.1}   # chest+front_delts+triceps : lats+upper_back+biceps
+  push_pull:      {min: 0.75, max: 1.35} # chest+front_delts+triceps : lats+upper_back+biceps,
+                                          # ~1.04 as routine.yaml is currently written
   quad_hamstring: {min: 0.0, max: 1.5}   # quads : hamstrings - quads uncovered by design
   upper_lower:    {min: 4.0, max: 14.0}  # upper : lower sets - runs high BY DESIGN
