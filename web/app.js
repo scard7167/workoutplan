@@ -467,8 +467,11 @@ function showPrescription(exercise) {
 function volumeCounts(days) {
   const live = state.sets.map(s => ({ ...s, date: state.date }));
   const all = [...history(), ...live];
-  const end = all.map(r => r.date).sort().pop();
-  const start = new Date(Date.parse(end) - (days - 1) * 864e5).toISOString().slice(0, 10);
+  // Nothing logged anywhere yet is a normal day-one state, not an error: anchor the
+  // window on today so the bands render at zero rather than throwing on an undefined end.
+  const end = all.map(r => r.date).sort().pop() || state.date;
+  const startMs = Date.parse(end) - (days - 1) * 864e5;
+  const start = isoDate(new Date(startMs));
   const win = all.filter(r => r.date >= start && r.date <= end);
   const counts = Object.fromEntries(MUSCLES.map(m => [m, 0]));
   for (const s of win)
@@ -499,11 +502,13 @@ function renderKpis() {
       <div class="d ${dcls}">${delta === null ? "no prior period"
         : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} vs prior 28d`}</div></div>
     <div class="kpi"><div class="k">Adherence</div>
-      <div class="v">${ad.rate === null ? "-" : Math.round(ad.rate * 100) + "%"}</div>
-      <div class="d">${ad.logged_sets}/${ad.planned_sets} sets · ${ad.trained_days}/${ad.planned_days}d</div></div>
+      <div class="v">${ad.empty || ad.rate === null ? "-" : Math.round(ad.rate * 100) + "%"}</div>
+      <div class="d">${ad.empty ? "nothing logged yet"
+        : `${ad.logged_sets}/${ad.planned_sets} sets · ${ad.trained_days}/${ad.planned_days}d`}</div></div>
     <div class="kpi"><div class="k">Load 7d</div>
-      <div class="v">${(br.vl_current / 1000).toFixed(1)}t</div>
-      <div class="d ${br.delta >= 0 ? "up" : "down"}">${br.delta >= 0 ? "+" : ""}${(br.delta / 1000).toFixed(1)}t vs prior</div></div>`;
+      <div class="v">${br.empty ? "-" : (br.vl_current / 1000).toFixed(1) + "t"}</div>
+      <div class="d ${br.empty ? "" : br.delta >= 0 ? "up" : "down"}">${br.empty ? "nothing logged yet"
+        : `${br.delta >= 0 ? "+" : ""}${(br.delta / 1000).toFixed(1)}t vs prior`}</div></div>`;
 }
 
 function trendChip(p) {
@@ -518,7 +523,9 @@ function trendChip(p) {
 function renderLiftGrid() {
   const P = ANALYTICS.progression;
   $("trend-meta").textContent =
-    `best set per session · ${ANALYTICS.index.baseline_weeks}w baseline · to ${ANALYTICS.last_logged}`;
+    ANALYTICS.sessions.length
+      ? `best set per session · ${ANALYTICS.index.baseline_weeks}w baseline · to ${ANALYTICS.last_logged}`
+      : "no sessions logged yet";
   $("liftgrid").innerHTML = routine().lifts.map(e => {
     const p = P[e];
     const vals = (p?.points || []).map(x => x.value);
@@ -620,6 +627,11 @@ function renderMeters() {
 
 function renderBridge() {
   const b = ANALYTICS.bridge;
+  if (b.empty) {
+    $("bridge").innerHTML = `<p class="empty">Needs two weeks of logged sets to decompose.
+      Nothing in <code>log.csv</code> yet.</p>`;
+    return;
+  }
   const rows = [["sets", b.effects.sets], ["weight", b.effects.weight], ["reps", b.effects.reps],
                 ["covar", b.effects.covar], ["mix", b.effects.mix]];
   const span = Math.max(...rows.map(r => Math.abs(r[1])), 1);
@@ -652,13 +664,20 @@ function renderStalls() {
       <span class="fn">${label(s.exercise)}</span>
       <span class="fs">${s.slope_per_week >= 0 ? "+" : ""}${s.slope_per_week}/wk · flat ${s.flat_days}d</span>
     </div><div class="fa">${s.action}</div></div>`).join("")
-    : `<p class="empty">Nothing stalled. A flat e1RM between load increments is what double
-       progression looks like when it is working - only a lift that has stopped climbing
-       over ${ANALYTICS.stalls.length === 0 ? "three weeks" : ""} and is not trending up gets flagged.</p>`;
+    : ANALYTICS.sessions.length
+      ? `<p class="empty">Nothing stalled. A flat e1RM between load increments is what
+         double progression looks like when it is working - only a lift that has stopped
+         climbing and is not trending up gets flagged.</p>`
+      : `<p class="empty">Nothing logged yet. A stall needs weeks of a lift before it
+         means anything.</p>`;
 }
 
 function renderBalance() {
   const b = ANALYTICS.balance;
+  if (b.empty) {
+    $("balance").innerHTML = `<p class="empty">No sets logged yet - no ratios to take.</p>`;
+    return;
+  }
   const rows = ["push_pull", "quad_hamstring", "upper_lower"].map(k => {
     const r = b[k];
     return `<div class="ratio"><span class="rn">${k.replace(/_/g, " : ")}</span>
@@ -670,7 +689,9 @@ function renderBalance() {
 
 function renderIndex() {
   const ix = ANALYTICS.index;
-  $("index-meta").textContent = `each lift vs its own first ${ix.baseline_weeks}w = 100 · ${ix.period_days}d to ${ix.period_end}`;
+  $("index-meta").textContent = ix.period_end
+    ? `each lift vs its own first ${ix.baseline_weeks}w = 100 · ${ix.period_days}d to ${ix.period_end}`
+    : `each lift vs its own first ${ix.baseline_weeks}w = 100`;
   const entries = Object.entries(ix.exercises).filter(([, v]) => v.index !== null)
     .sort((a, b) => b[1].index - a[1].index);
   const hi = Math.max(120, ...entries.map(([, v]) => v.index));
@@ -683,9 +704,12 @@ function renderIndex() {
         <span class="base" style="left:${base}%"></span></span>
       <span class="iv">${v.index}</span></div>`;
   }).join("");
+  if (!entries.length)
+    $("indexrows").innerHTML = `<p class="empty">Nothing indexed yet - a lift needs
+      ${ix.baseline_weeks} weeks of its own history before 100 means anything.</p>`;
   $("index-note").innerHTML = ix.unindexed.length
     ? `Not indexed: ${ix.unindexed.map(u => `<b>${label(u.exercise)}</b> - ${u.reason}`).join("; ")}.`
-    : "Every lift has a baseline.";
+    : entries.length ? "Every lift has a baseline." : "";
 }
 
 // Everything below the fold on Trends comes from analyze.py at build time. Sessions
@@ -761,8 +785,9 @@ const weekdayOf = (iso) => {
 function renderSessionLog() {
   const log = buildSessionLog();
   const shown = log.slice(0, state.logLimit);
-  $("log-meta").textContent =
-    `${log.length} sessions · ${new Set(state.committed.map(r => r.date)).size} submitted here`;
+  $("log-meta").textContent = log.length
+    ? `${log.length} sessions · ${new Set(state.committed.map(r => r.date)).size} submitted here`
+    : "nothing logged yet";
   $("btn-more").hidden = shown.length >= log.length;
   $("btn-more").textContent = `Show more (${log.length - shown.length} older)`;
 
@@ -794,6 +819,10 @@ function renderSessionLog() {
           <button class="slogdel" data-date="${sn.date}" aria-label="Remove ${sn.date}">remove</button>` : ""}
       </div>${lifts}</div>`;
   }).join("");
+
+  if (!log.length)
+    $("sessionlog").innerHTML = `<p class="empty">No sessions yet. Log one on Today and
+      press Submit - it appears here, and becomes the reference the next one is read against.</p>`;
 
   for (const btn of $("sessionlog").querySelectorAll(".slogdel")) {
     btn.onclick = () => {
@@ -1517,5 +1546,7 @@ renderScan();
 showFeedback(state.sets.length
   ? `<span class="hint">session restored: ${state.sets.length} sets</span>`
   : `<span class="l1">${routine().week[todayKey()].name}</span>\n` +
-    `<span class="l2">${ANALYTICS.sessions.length} sessions logged · last ${ANALYTICS.last_logged}</span>\n` +
+    `<span class="l2">${ANALYTICS.sessions.length
+      ? `${ANALYTICS.sessions.length} sessions logged · last ${ANALYTICS.last_logged}`
+      : "no history yet - every lift reads no baseline until you log it"}</span>\n` +
     `<span class="hint">tap into a set box and enter the weight</span>`);

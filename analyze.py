@@ -476,7 +476,12 @@ def strength_index(rows: list[Set], lib: dict, cfg: dict, period_days: int = 28)
     """
     an = cfg["analysis"]
     if not rows:
-        return {"exercises": {}, "muscles": {}, "unindexed": []}
+        # EXACTLY the populated return's keys. An empty log is a normal state on day one,
+        # and every consumer - print_index, the JSON blob, the web app - reads this shape.
+        # A short dict here is a KeyError somewhere else, which is what it was.
+        return {"period_days": period_days, "period_end": None,
+                "baseline_weeks": an["baseline_weeks"], "exercises": {},
+                "muscles": {}, "unindexed": []}
     end = max(s.date for s in rows)
     cur_start = end - dt.timedelta(days=period_days - 1)
     prev_start = cur_start - dt.timedelta(days=period_days)
@@ -851,8 +856,13 @@ def print_progression(p: dict) -> None:
 
 def print_index(ix: dict) -> None:
     print(f"STRENGTH INDEX  baseline = each lift's first {ix['baseline_weeks']}w = 100  "
-          f"| last {ix['period_days']}d to {ix['period_end']}")
+          f"| last {ix['period_days']}d to {ix['period_end'] or 'nothing logged yet'}")
     print("-" * 62)
+    if not ix["exercises"] and not ix["unindexed"]:
+        print(f"  no logged sets - an index needs {ix['baseline_weeks']} weeks of a lift "
+              f"before it means anything")
+        print("-" * 62)
+        return
     for ex, v in sorted(ix["exercises"].items(), key=lambda kv: -(kv[1]["index"] or 0)):
         prior = f"{v['prior_index']:g}" if v["prior_index"] is not None else "-"
         cur = f"{v['index']:g}" if v["index"] is not None else "-"

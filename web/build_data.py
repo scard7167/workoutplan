@@ -1,25 +1,40 @@
 #!/usr/bin/env python3
-"""Regenerate web/data.js from the YAML library, config and the example log.
+"""Regenerate web/data.js from the YAML library, config and a log.
 
 The prototype must never carry its own copy of the rules. Run this after editing
-exercises.yaml, config.yaml or log.example.csv:
+exercises.yaml, config.yaml, routine.yaml or the log:
 
-    python3 web/build_data.py
+    python3 web/build_data.py                 # log.csv - the real one. What gets deployed.
+    python3 web/build_data.py --example       # log.example.csv - 12 weeks of generated
+                                              # history, for demoing the analytics
+
+The default is the REAL log, empty or not. A build that quietly seeds the deployed app
+with 12 weeks of fabricated history is worse than an empty one: on day one every lift
+would show a "last week" number that never happened, and the whole point of the log is
+that its numbers are true.
 """
-import csv, json, os, subprocess, sys
+import argparse, csv, json, os, subprocess, sys
 import yaml
 
 COMPACT = (",", ":")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+ap = argparse.ArgumentParser(description=__doc__,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--example", action="store_true",
+                help="build from log.example.csv instead of log.csv")
+args = ap.parse_args()
+LOG_NAME = "log.example.csv" if args.example else "log.csv"
+LOG_PATH = os.path.join(ROOT, LOG_NAME)
+
 lib = yaml.safe_load(open(os.path.join(ROOT, "exercises.yaml")))
 cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
-rows = list(csv.DictReader(open(os.path.join(ROOT, "log.example.csv"))))
+rows = list(csv.DictReader(open(LOG_PATH)))
 routine = yaml.safe_load(open(os.path.join(ROOT, "routine.yaml")))
 # Deep analytics are computed once by analyze.py and embedded. The browser renders
 # these numbers; it never recomputes them. One implementation, no drift.
 subprocess.run([sys.executable, os.path.join(ROOT, "analyze.py"), "json",
-                "--log", os.path.join(ROOT, "log.example.csv"),
+                "--log", LOG_PATH,
                 "--out", os.path.join(ROOT, "web", "analytics.json")], check=True)
 analytics = json.load(open(os.path.join(ROOT, "web", "analytics.json")))
 
@@ -48,7 +63,7 @@ UNCOVERED_JSON = json.dumps(cfg.get("uncovered_by_design", []), separators=COMPA
 ANALYTICS_JSON = json.dumps(analytics, separators=COMPACT)
 LOG_JSON = json.dumps(log, separators=COMPACT)
 
-out = ("// GENERATED from exercises.yaml, config.yaml, routine.yaml, log.example.csv and\n"
+out = (f"// GENERATED from exercises.yaml, config.yaml, routine.yaml, {LOG_NAME} and\n"
        "// analyze.py. Do not edit by hand. Regenerate: python3 web/build_data.py\n"
        f"export const EXERCISES = {EX_JSON};\n\n"
        f"export const BANDS = {BAND_JSON};\n\n"
