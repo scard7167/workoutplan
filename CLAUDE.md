@@ -22,7 +22,7 @@ already loaded by the cardio; quads and calves are uncovered by design (see
 | `config.yaml` | volume target bands (derived from routine.yaml), progression rule, thresholds |
 | `analyze.py` | all analytics: loader, volume, prescribe, progression, index, bridge, stalls, balance, adherence |
 | `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks - the example log is real output of the real rule, not hand-typed |
-| `log.example.csv` | 12 weeks of generated history so analytics have something to show before the first real session |
+| `log.example.csv` | 12 weeks of generated history, for DEMOING the analytics. Never what gets deployed - see below |
 | `web/` | phone-first prototype UI (Today / Trends / Plan). See **The web app** below |
 
 ## Schema
@@ -246,4 +246,8 @@ Lower-body bands are deliberately conservative because of the cycling.
   are uncovered by design; their report line is UNCOVERED, never RED.
 - `web/data.js` and `web/analytics.json` are generated files. Never hand-edit them -
   run `python3 web/build_data.py` after changing `exercises.yaml`, `config.yaml`,
-  `routine.yaml` or `log.example.csv`.
+  `routine.yaml` or `log.csv`.
+- `web/build_data.py` builds from `log.csv`, the real log, empty or not. `--example`
+  builds the demo from `log.example.csv` - never deploy that build. Seeding the live app
+  with generated history puts a "last week" number on every lift that never happened,
+  which is the one thing this log exists not to do.
