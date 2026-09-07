@@ -93,6 +93,7 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
   font: 400 20px/1 var(--sans); cursor: pointer;
 }
 .plan .rx { font: 600 15px/1.2 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; flex: none; }
+.plan .rx.live { color: var(--accent); }   /* showing today's top set, not the prescription */
 .plan .why { font: 400 11px/1.3 var(--mono); color: var(--muted); letter-spacing: .01em; }
 .plan .why.progress { color: var(--good); }
 .plan .why.deload { color: var(--crit); }
@@ -108,8 +109,12 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .slotw::placeholder { color: var(--muted); font-weight: 400; }
 .slotw:focus { border-color: var(--accent); outline: none; }
 .slot.filled .slotw { border-color: var(--accent-d); background: rgba(127,209,232,.08); }
+.slotprev { font: 400 11px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.slotlab { opacity: .8; }
+.slotlab .slotn, .slotlab .slotprev { letter-spacing: .04em; }
+.labgap { height: 40px; }   /* matches .slotw, so the "last" row lines up with the values */
 .addslot {
-  width: 38px; height: 38px; margin-top: 15px; border-radius: 8px; border: 1px dashed var(--line-2);
+  width: 38px; height: 38px; border-radius: 8px; border: 1px dashed var(--line-2);
   background: none; color: var(--muted); font: 400 17px/1 var(--sans); cursor: pointer; flex: none;
 }
 .addslot:hover { color: var(--ink-2); border-color: var(--line-2); }

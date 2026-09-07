@@ -175,23 +175,39 @@ function renderToday() {
            <img src="${img}" alt="" loading="lazy"></button>`
       : "";
     const placeholder = fmtW(rx.weight_kg, p.exercise);
+
+    // Headline weight follows what you are ACTUALLY lifting today once anything is
+    // logged - the heaviest set entered - and falls back to the prescription before
+    // that. The rep target beside it never moves: it comes from the plan.
+    const today = state.sets.filter(s => s.exercise === p.exercise);
+    const top = today.length ? Math.max(...today.map(s => s.weight_kg)) : null;
+    const headline = top === null ? placeholder : fmtW(top, p.exercise);
+
+    // Last session's weight per set, greyed under each box - the number to beat.
+    const prior = priorSession(p.exercise);
     const slots = Array.from({ length: slotCount(p) }, (_, i) => {
       const setNo = i + 1;
       const logged = state.sets.find(s => s.exercise === p.exercise && s.set_no === setNo);
+      const prev = prior && prior.find(s => s.set_no === setNo);
       return `<div class="slot ${logged ? "filled" : ""}">
         <span class="slotn">${setNo}</span>
         <input type="text" inputmode="decimal" class="slotw" data-ex="${p.exercise}" data-set="${setNo}"
                placeholder="${placeholder}" value="${logged ? +logged.weight_kg : ""}"
                aria-label="${label(p.exercise)} set ${setNo} weight">
+        <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
       </div>`;
     }).join("");
+    const legend = `<div class="slot slotlab" aria-hidden="true"
+        title="${prior ? "last session " + prior[0].date : "no previous session"}">
+      <span class="slotn">set</span><span class="labgap"></span>
+      <span class="slotprev">last</span></div>`;
     return `<li class="${cls}" data-ex="${p.exercise}">
       <div class="rowtop">
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-        <span class="rx">${placeholder} &times; ${rx.target_reps}</span>
+        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${rx.target_reps}</span>
       </div>
       <span class="why ${rx.reason}">${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}</span>
-      <div class="slots">${slots}
+      <div class="slots">${legend}${slots}
         <button class="addslot" data-role="add" data-ex="${p.exercise}" aria-label="add a set">+</button>
       </div></li>`;
   }).join("");
