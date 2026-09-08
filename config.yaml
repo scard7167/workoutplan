@@ -24,10 +24,10 @@ volume_targets:
   lats:         {min: 10, target: 14, max: 18}
   upper_back:   {min: 3,  target: 5,  max: 8}
   front_delts:  {min: 4,  target: 6,  max: 8}
-  side_delts:   {min: 10, target: 12, max: 16}
+  side_delts:   {min: 13, target: 15, max: 19}
   rear_delts:   {min: 6,  target: 8,  max: 11}
   biceps:       {min: 5,  target: 6,  max: 9}
-  triceps:      {min: 7,  target: 8,  max: 11}
+  triceps:      {min: 9,  target: 10, max: 13}
   quads:        {min: 0,  target: 0,  max: 6}
   hamstrings:   {min: 4,  target: 6,  max: 8}
   glutes:       {min: 4,  target: 6,  max: 8}

@@ -195,6 +195,55 @@ seated_chest_press_machine:
   rep_range: [8, 12]
   image: images/seated_chest_press_machine.jpg
 
+lat_pulldown_machine:
+  # gym80 Sygnum Dual 3044 "Ruckenzugmaschine Dual" - plate-stack pulldown, independent
+  # arms. NOT lat_pulldown: that is the cable station, this is a total-stack machine with
+  # its own load curve, so it gets its own baseline. The product copy says "breite
+  # Ruckenmuskulatur" (lats), so lats is the single prime mover - if it turns out to be a
+  # row rather than a pulldown, upper_back belongs here as co-primary.
+  aliases: [gym80 3044, rueckenzugmaschine dual, ruckenzugmaschine dual, back pull
+            machine, lat pulldown machine, dual pulldown]
+  muscles: [lats]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/lat_pulldown_machine.jpg
+
+shoulder_press_machine:
+  # gym80 Sygnum 3032 "Schulterpresse" - seated plate-stack shoulder press.
+  aliases: [gym80 3032, schulterpresse, shoulder press machine, machine shoulder press]
+  muscles: [front_delts]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/shoulder_press_machine.jpg
+
+standing_lateral_raise_machine:
+  # gym80 Sygnum 3099 "Seithebemaschine stehend" - the STANDING lateral raise machine,
+  # a different machine from 3050 (seated) and loaded differently. Separate entry.
+  aliases: [gym80 3099, seithebemaschine stehend, standing lateral raise, standing side
+            raise, standing lateral raise machine]
+  muscles: [side_delts]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [12, 18]
+  image: images/standing_lateral_raise_machine.jpg
+
+biceps_machine:
+  # gym80 Sygnum 3010 "Bizepsmaschine" - "Isoliertes Training des Bizeps", so biceps is
+  # the only prime mover.
+  aliases: [gym80 3010, bizepsmaschine, biceps machine, machine curl]
+  muscles: [biceps]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 14]
+  image: images/biceps_machine.jpg
+
+triceps_machine:
+  # gym80 Sygnum 3011 "Trizepsmaschine" - "Isoliertes Training des Trizeps". Seated, not
+  # the overhead 3095: different machine, different baseline.
+  aliases: [gym80 3011, trizepsmaschine, triceps machine, seated triceps machine]
+  muscles: [triceps]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 15]
+  image: images/triceps_machine.jpg
+
 lateral_raise_machine:
   # gym80 Sygnum 3050 "Seithebemaschine" - plate-stack lateral raise, independent arms.
   # Not the same unit as lateral_raise (DB) or cable_lateral_raise.
