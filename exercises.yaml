@@ -235,6 +235,17 @@ biceps_machine:
   rep_range: [10, 14]
   image: images/biceps_machine.jpg
 
+horizontal_biceps_machine:
+  # gym80 Sygnum 3098 "Bizeps horizontal" - "Isoliertes Training des Bizeps", so biceps
+  # is the only prime mover. A SECOND biceps machine alongside 3010: different arm angle
+  # and a different stack, so a separate baseline rather than an alias onto it.
+  aliases: [gym80 3098, bizeps horizontal, biceps horizontal, horizontal biceps,
+            horizontal biceps machine]
+  muscles: [biceps]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 14]
+  image: images/horizontal_biceps_machine.jpg
+
 triceps_machine:
   # gym80 Sygnum 3011 "Trizepsmaschine" - "Isoliertes Training des Trizeps". Seated, not
   # the overhead 3095: different machine, different baseline.

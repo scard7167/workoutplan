@@ -26,7 +26,7 @@ volume_targets:
   front_delts:  {min: 4,  target: 6,  max: 8}
   side_delts:   {min: 13, target: 15, max: 19}
   rear_delts:   {min: 6,  target: 8,  max: 11}
-  biceps:       {min: 5,  target: 6,  max: 9}
+  biceps:       {min: 7,  target: 8,  max: 11}
   triceps:      {min: 9,  target: 10, max: 13}
   quads:        {min: 0,  target: 0,  max: 6}
   hamstrings:   {min: 4,  target: 6,  max: 8}
