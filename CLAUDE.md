@@ -200,6 +200,27 @@ Two copies exist and they are not equally capable:
 
 Every model-backed feature must degrade to the second case, silently and by default.
 
+### Where a logged session lives
+
+`localStorage` is the **write-ahead buffer**, never the store of record: one browser on
+one device, and a cleared cache takes the history with it. The store is the artifact's
+own database (`db` capability), so a Submit is written locally first and flushed after -
+logging never waits on a signal, which matters because a gym with no bars is the normal
+case. Failed writes queue under `strengthlog.queue.v1` and retry on the next load and on
+`online`. Outside claude.ai there is no store: the page keeps working on `localStorage`
+alone and says so.
+
+One document per SESSION at `sessions/<date>`, never one per set - the database caps at
+5,000 documents, so a document per set would exhaust it in weeks. The page pulls a
+BOUNDED WINDOW (`SYNC_WINDOW` days), not the whole history: queries scan the collection,
+and the browser only ever needs enough to compute the "last week" reference and the 7/14
+day bands. Long-range analysis is `analyze.py`'s job, from `log.csv`.
+
+`log.csv` remains the append-only system of record and the only input to the deep
+analytics. The store is where sessions wait until they reach it. A session in the store
+but not yet in `log.csv` is still removable in the app; once it is in `log.csv` it is
+history and immutable.
+
 ### Provisional exercises
 
 The Plan tab's exercise field takes free text, and the photo dump proposes machines from

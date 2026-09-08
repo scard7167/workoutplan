@@ -39,6 +39,10 @@ const state = {
   provisional: {},   // lifts that exist in this browser only - see below
   photos: [],        // machine photos waiting to be identified (this session only)
   proposals: null,   // what Claude read off them, pending your confirmation
+  remote: [],        // sessions pulled from the store - see `sync` below
+  queue: [],         // dates written here but not yet in the store
+  sync: "off",       // off | idle | pending | error
+  syncCode: null,
 };
 
 // --------------------------------------------- provisional exercises
@@ -150,7 +154,9 @@ const label = (e) => e.replace(/_/g, " ");
 // --------------------------------------------------- the progression rule
 const roundDown = (kg, inc) => Math.floor((kg + 1e-9) / inc) * inc;
 
-const history = () => [...SEED_LOG, ...state.committed];
+// Everything the browser knows happened: what analyze.py had at build time, what the
+// store holds, and what this device logged and may not have flushed yet.
+const history = () => [...SEED_LOG, ...remoteRows(), ...state.committed];
 
 function priorSession(exercise) {
   const all = history().filter(r => r.exercise === exercise && r.date < state.date);
@@ -397,7 +403,7 @@ function renderToday() {
       };
     }
   }
-  $("hstate").textContent = `${state.date} · ${state.sets.length} sets`;
+  renderSyncState();
 }
 
 // A slot's position IS its set_no - clearing it removes that logged row without
@@ -717,15 +723,17 @@ function renderIndex() {
 // that are a week stale.
 function renderLocalNote() {
   const el = $("localnote");
-  const days = [...new Set(state.committed.map(r => r.date))];
+  const days = [...new Set([...remoteRows(), ...state.committed].map(r => r.date))];
   if (!days.length) { el.hidden = true; return; }
   el.hidden = false;
+  const pending = state.queue.length;
   el.innerHTML =
-    `<b>${days.length} session${days.length === 1 ? "" : "s"} submitted here</b> ` +
-    `(${days.sort().join(", ")}), counted in the volume bands below and in each lift's ` +
-    `"last week" reference - but not in the strength index, per-lift trends, bridge, ` +
-    `stalls or adherence. Those are computed by <code>analyze.py</code>: Export rows, ` +
-    `paste into <code>log.csv</code>, re-run it.`;
+    `<b>${days.length} session${days.length === 1 ? "" : "s"} logged since the last ` +
+    `analyze.py run</b> (${days.sort().join(", ")})` +
+    (pending ? `, ${pending} not yet synced` : "") +
+    `. Counted in the volume bands below and in each lift's "last week" reference - but ` +
+    `not in the strength index, per-lift trends, bridge, stalls or adherence. Those are ` +
+    `computed by <code>analyze.py</code> from <code>log.csv</code>.`;
 }
 
 // --------------------------------------------------------- session log
@@ -748,7 +756,11 @@ function buildSessionLog() {
     if (!dm.has(r.exercise)) dm.set(r.exercise, []);
     dm.get(r.exercise).push(r);
   }
-  const submittedDates = new Set(state.committed.map(r => r.date));
+  // Removable = not yet in log.csv. The immutability rule protects the logged history
+  // analyze.py was built from, not a session that is merely stored - and after a cache
+  // clear a synced session lives only in `remote`, so keying this on `committed` would
+  // silently make it permanent on one device and editable on another.
+  const seeded = new Set(SEED_LOG.map(r => r.date));
 
   return [...perDate.keys()].sort().reverse().map(date => {
     const exercises = [...perDate.get(date)].map(([ex, sets]) => {
@@ -773,7 +785,7 @@ function buildSessionLog() {
                delta: comparable ? +(top - prevTop).toFixed(2) : null };
     }).sort((a, b) => a.ex.localeCompare(b.ex));
     const setCount = exercises.reduce((a, e) => a + e.sets.length, 0);
-    return { date, exercises, setCount, submitted: submittedDates.has(date) };
+    return { date, exercises, setCount, submitted: !seeded.has(date) };
   });
 }
 
@@ -785,8 +797,10 @@ const weekdayOf = (iso) => {
 function renderSessionLog() {
   const log = buildSessionLog();
   const shown = log.slice(0, state.logLimit);
+  const pend = log.filter(sn => sn.submitted).length;
   $("log-meta").textContent = log.length
-    ? `${log.length} sessions · ${new Set(state.committed.map(r => r.date)).size} submitted here`
+    ? `${log.length} session${log.length === 1 ? "" : "s"}` +
+      (pend ? ` · ${pend} not yet in log.csv` : "")
     : "nothing logged yet";
   $("btn-more").hidden = shown.length >= log.length;
   $("btn-more").textContent = `Show more (${log.length - shown.length} older)`;
@@ -829,7 +843,11 @@ function renderSessionLog() {
       const d = btn.dataset.date;
       if (!confirm(`Remove the session submitted on ${d}? It has not reached log.csv yet.`)) return;
       state.committed = state.committed.filter(r => r.date !== d);
-      saveCommitted(); renderToday(); renderTrends();
+      state.remote = state.remote.filter(r => r.date !== d);
+      saveCommitted();
+      queueDate(d);      // now empty locally, so the flush deletes the document
+      flushQueue();
+      renderToday(); renderTrends();
     };
   }
 }
@@ -1140,6 +1158,162 @@ function exportYaml() {
     for (const p of day.plan) lines.push(`      - {exercise: ${p.exercise}, sets: ${p.sets}}`);
   }
   out.textContent = lines.join("\n");
+}
+
+// ---------------------------------------------------------------- sync
+// Where a logged session actually lives.
+//
+// localStorage is the WRITE-AHEAD BUFFER, never the store of record: it is one browser
+// on one device, and a cleared cache takes a year of training with it. The store is the
+// artifact's own database, reachable only inside claude.ai - so every write lands
+// locally first and is flushed when the store is there. A gym basement with no signal is
+// the normal case, not the edge case, and Submit must never block on the network.
+//
+// One document per SESSION, not per set: the database caps at 5,000 documents, and
+// 7 sessions a week is ~364 a year - over a decade of headroom. A document per set would
+// burn that cap in eleven weeks.
+//
+// The page reads a bounded WINDOW, not the whole history. Queries scan the collection,
+// so pulling three years of sessions on every load would eventually cost a
+// resource_exhausted. The window only has to cover what the browser computes for itself:
+// the "last week" reference row and the 7/14-day volume bands. Everything longer-range
+// is analyze.py's job, from log.csv, and no amount of local history changes that.
+const STORE_QUEUE = "strengthlog.queue.v1";
+const SYNC_WINDOW = 60;      // days of history to pull; the widest local window is 14
+
+let DB = null;
+let flushing = false;
+
+const dbErr = (e) => (e && typeof e.code === "string") ? e.code : "unavailable";
+
+function saveQueue() {
+  try { localStorage.setItem(STORE_QUEUE, JSON.stringify(state.queue)); }
+  catch { /* private mode */ }
+}
+function loadQueue() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORE_QUEUE) || "[]");
+    if (Array.isArray(d)) state.queue = d.filter(x => typeof x === "string");
+  } catch { /* ignore */ }
+}
+const queueDate = (date) => {
+  if (!state.queue.includes(date)) state.queue.push(date);
+  saveQueue();
+};
+
+// Rows this device has not flushed win over the copy in the store: they are newer by
+// construction, and a session edited offline must not be overwritten by its own
+// pre-edit version on the next pull.
+const remoteRows = () => {
+  const local = new Set(state.committed.map(r => r.date));
+  return state.remote.filter(r => !local.has(r.date));
+};
+
+function sessionDoc(date) {
+  const sets = state.committed
+    .filter(r => r.date === date)
+    .map(({ exercise, set_no, weight_kg, reps, rir }) =>
+      ({ exercise, set_no, weight_kg, reps, rir: rir ?? null }));
+  return { date, sets, updated_at: new Date().toISOString(), schema: 1 };
+}
+
+async function pullRemote() {
+  if (!DB) return;
+  const since = isoDate(new Date(Date.now() - SYNC_WINDOW * 864e5));
+  try {
+    const snap = await DB.collection("sessions")
+      .where("date", ">=", since).orderBy("date", "desc").limit(200).get();
+    const rows = [];
+    for (const d of snap.docs) {
+      const body = d.data();
+      if (!body || !Array.isArray(body.sets)) continue;
+      for (const s of body.sets)
+        rows.push({ ...s, date: body.date || d.id, rir: s.rir ?? null, notes: "" });
+    }
+    state.remote = rows;
+  } catch (e) {
+    setSync("error", dbErr(e));
+  }
+}
+
+// One date at a time, stopping at the first failure so the queue keeps its order and
+// nothing is dropped on a flaky connection. A date with no local rows means the session
+// was removed here, so the document goes too.
+async function flushQueue() {
+  if (!DB || flushing || !state.queue.length) return;
+  flushing = true;
+  setSync("pending");
+  try {
+    for (const date of [...state.queue]) {
+      const doc = sessionDoc(date);
+      try {
+        if (doc.sets.length) await DB.doc(`sessions/${date}`).set(doc);
+        else await DB.doc(`sessions/${date}`).delete();
+      } catch (e) {
+        const code = dbErr(e);
+        // invalid_argument and quota_exceeded cannot be retried into success - say so
+        // and stop, rather than looping on a write that will never land.
+        setSync("error", code);
+        if (code === "quota_exceeded" || code === "invalid_argument") state.queue = [];
+        saveQueue();
+        flushing = false;
+        return;
+      }
+      state.queue = state.queue.filter(d => d !== date);
+      saveQueue();
+    }
+    await pullRemote();
+    setSync("idle");
+  } finally {
+    flushing = false;
+    renderSyncState();
+  }
+}
+
+function setSync(mode, code) {
+  state.sync = mode;
+  state.syncCode = code || null;
+  renderSyncState();
+}
+
+function renderSyncState() {
+  const n = state.queue.length;
+  const txt =
+    state.sync === "off"     ? ""
+    : state.sync === "error" ? ` · sync ${state.syncCode || "failed"}`
+    : n                      ? ` · ${n} to sync`
+    : " · synced";
+  $("hstate").textContent = `${state.date} · ${state.sets.length} sets${txt}`;
+  const el = $("syncnote");
+  if (!el) return;
+  el.hidden = state.sync === "off" && !n;
+  el.className = "scannote" + (state.sync === "error" ? " bad" : "");
+  el.innerHTML =
+    state.sync === "off"
+      ? `<b>${n} session${n === 1 ? "" : "s"} held on this device only.</b> There is no ` +
+        `store behind this copy of the page - open it inside claude.ai to sync, or ` +
+        `Export rows and paste them into <code>log.csv</code>.`
+    : state.sync === "error"
+      ? `<b>Sync failed (${state.syncCode}).</b> ${n} session${n === 1 ? "" : "s"} still ` +
+        `only on this device. It retries on the next load; Export rows is the way out ` +
+        `if it keeps failing.`
+    : n
+      ? `${n} session${n === 1 ? "" : "s"} waiting to sync.`
+      : `Synced. Sessions are stored on your Claude account and reach every device.`;
+}
+
+// Resolves late and may never resolve: served anywhere but inside claude.ai there is no
+// store at all, and the page has to stay fully usable - localStorage alone, exactly as
+// it behaved before this existed.
+async function openStore() {
+  try {
+    DB = await window.claude?.use?.("db");
+  } catch { DB = null; }
+  if (!DB) { setSync("off"); return; }
+  setSync("idle");
+  await pullRemote();
+  await flushQueue();
+  renderToday(); renderTrends();
 }
 
 // ------------------------------------------------------------ photo dump
@@ -1456,6 +1630,8 @@ function submitSession() {
 
   state.committed = [...state.committed, ...dated];
   saveCommitted();
+  queueDate(wasDate);
+  flushQueue();          // deliberately not awaited: Submit must never wait on a network
   state.sets = [];
   state.sticky = null;
   $("csvout").hidden = true;
@@ -1468,8 +1644,8 @@ function submitSession() {
   showFeedback(
     `<span class="l1">submitted ${wasDate}: ${sets} sets, ${lifts} lifts</span>\n` +
     `<span class="l2">next up ${state.date} &middot; ${routine().week[todayKey()].name}</span>\n` +
-    `<span class="hint">counts toward volume and next week's baseline · deep trends need ` +
-    `an analyze.py run</span>`);
+    `<span class="hint">${DB ? "stored on your Claude account" : "held on this device"} ` +
+    `· deep trends need an analyze.py run</span>`);
 }
 
 function saveCommitted() {
@@ -1547,12 +1723,15 @@ $("btn-reset").onclick = () => {
 loadProvisional();   // before anything renders: the routine may name one of these
 loadRoutine();
 loadCommitted();
+loadQueue();
 loadSession();
 selectTab("today");
 renderToday();
 renderTrends();
 renderPlan();
 renderScan();
+openStore();                                   // async; the page is already usable
+addEventListener("online", () => flushQueue());
 showFeedback(state.sets.length
   ? `<span class="hint">session restored: ${state.sets.length} sets</span>`
   : `<span class="l1">${routine().week[todayKey()].name}</span>\n` +

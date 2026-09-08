@@ -48,13 +48,17 @@
         <button id="btn-clear">Discard</button>
       </div>
       <pre class="csv" id="csvout" hidden></pre>
+      <div class="scannote" id="syncnote" hidden></div>
 
       <p class="fineprint">
-        <b>Submit</b> banks the session on this device and moves to the next day. It counts
-        toward the volume bands and becomes the "last week" reference for next time - but
-        the strength index, per-lift trends, bridge, stalls and adherence come from
-        <code>analyze.py</code>, so those only move once you Export the rows into
-        <code>log.csv</code> and re-run it. Nothing here is written to
+        <b>Submit</b> stores the session and moves to the next day. Inside claude.ai it
+        goes to your account's own store, so it survives a cleared cache and reaches every
+        device; anywhere else it stays in this browser. Either way it is written locally
+        first and synced after, so logging never waits on a signal. It counts toward the
+        volume bands and becomes the "last week" reference for next time - but the
+        strength index, per-lift trends, bridge, stalls and adherence come from
+        <code>analyze.py</code>, so those only move once the sessions reach
+        <code>log.csv</code> and it runs again. Nothing here writes to
         <code>log.csv</code> directly. Loads come from the double-progression rule in
         <code>config.yaml</code>, never from anywhere else. Weight only - reps are always
         the target shown, RIR always blank, so a deload can't trigger from what's logged

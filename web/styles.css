@@ -368,6 +368,10 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .dropnote { flex-basis: 100%; margin: 0; font: 400 10.5px/1.55 var(--sans); color: var(--muted); }
 .scannote { font: 400 11px/1.5 var(--mono); color: var(--muted); margin-top: 10px; }
 .scannote .err { color: var(--crit); }
+.scannote.bad { color: var(--crit); }
+.scannote b { color: var(--ink-2); font-weight: 500; }
+.scannote code { font: 400 10.5px var(--mono); color: var(--ink-2); }
+#syncnote { margin-top: 12px; }
 
 #scanqueue { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 #scanqueue:empty { margin-top: 0; }
