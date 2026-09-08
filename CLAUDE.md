@@ -225,18 +225,24 @@ history and immutable.
 
 Two kinds of edit, and conflating them loses work:
 
-- **Exercise order is cosmetic.** It moves nothing between muscles, so it changes no
-  volume and no band. It is therefore owned by the phone: stored as a list of exercise
-  NAMES per day (`strengthlog.order.v1`, synced to `prefs/order`), applied over whatever
-  `routine.yaml` currently says. Because it is by name and not by position, it survives a
-  publish - a lift the file drops falls out, a lift the file adds lands at the end. It
-  never needs to reach the repo.
-- **Set counts, added and removed lifts change weekly volume**, and `config.yaml`'s bands
-  are DERIVED from that. Until such an edit reaches `routine.yaml` the bands are
-  measuring a plan that is not the one on screen, so these still go through
-  `Export routine.yaml` and a paste. They are also tied to the `routine.yaml` they were
-  made against and are dropped when a newer one ships - the Plan tab says so out loud
-  rather than letting a set-count change vanish unannounced.
+**Persisting and exporting are different things.** Order and set counts both PERSIST
+without any repo round-trip; only some edits additionally need to be EXPORTED.
+
+- **Order and set counts are owned by the phone.** Both are stored BY EXERCISE NAME per
+  day (`strengthlog.order.v1` / `.sets.v1`, synced to `prefs/order` / `prefs/sets`) and
+  applied over whatever `routine.yaml` currently says, by `effectivePlan()` - the single
+  place a day's plan is assembled, read by Today, the Plan tab and the export alike.
+  Being keyed by name and not by position, they survive a publish: a lift the file drops
+  falls out, a lift the file adds lands at the end at its file set count. A set count
+  equal to the file's is not an override and is discarded, so it cannot silently shadow
+  a later change.
+- **A set count still has to be EXPORTED**, because it changes a muscle's weekly volume
+  and `config.yaml`'s bands are DERIVED from that: until it reaches `routine.yaml` the
+  bands are measuring a plan that is not the one on screen. The Plan tab counts the
+  drift so it is visible rather than assumed.
+- **Adding, removing or swapping a lift** is still a snapshot edit tied to the
+  `routine.yaml` it was made against, and IS dropped when a newer one ships - the Plan
+  tab says so out loud rather than letting it vanish unannounced.
 
 ### Provisional exercises
 

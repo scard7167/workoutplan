@@ -41,8 +41,9 @@ const state = {
   proposals: null,   // what Claude read off them, pending your confirmation
   remote: [],        // sessions pulled from the store - see `sync` below
   order: {},         // per-day exercise ORDER, owned by the phone - see below
-  orderAt: null,     // when this device last changed the order
-  orderDirty: false, // order changed but not yet in the store
+  setsBy: {},        // per-day, per-lift SET COUNT overrides - same ownership as order
+  orderAt: null,     // when this device last changed either of them
+  orderDirty: false, // changed but not yet in the store
   dropped: 0,        // set-count edits discarded because a newer plan shipped
   queue: [],         // dates written here but not yet in the store
   sync: "off",       // off | idle | pending | error
@@ -293,7 +294,7 @@ function slotCount(p) {
 function renderToday() {
   const day = todayKey();
   const entry = routine().week[day];
-  const plan = orderedPlan(day, entry.plan);
+  const plan = effectivePlan(day);
   const d = new Date();
   d.setDate(d.getDate() + state.dayOffset);
   const dayText = d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
@@ -893,6 +894,33 @@ function loadRoutine() {
 // deploy: a lift the file dropped simply falls out of the list, and one the file added
 // lands at the end rather than silently displacing something.
 const STORE_ORDER = "strengthlog.order.v1";
+const STORE_SETS = "strengthlog.sets.v1";
+
+// THE day's plan, and the only place it is assembled: the published routine.yaml (or a
+// structural edit of it), with this device's set-count overrides applied, in this
+// device's order. Today, the Plan tab and the export all read this, so they cannot
+// disagree with each other.
+function effectivePlan(dayKey) {
+  const base = routine().week[dayKey].plan;
+  const ov = state.setsBy[dayKey] || {};
+  const withSets = base.map(p =>
+    ov[p.exercise] ? { ...p, sets: clamp(ov[p.exercise], 1, 8) } : p);
+  return orderedPlan(dayKey, withSets);
+}
+
+// Set counts are stored BY EXERCISE NAME, exactly like the order and for exactly the
+// same reason: a snapshot of the whole routine is invalidated the moment a new
+// routine.yaml ships, which is how every set count typed on the phone was being wiped by
+// the next publish. An override by name survives it - and an override that matches the
+// file is not an override at all, so it is dropped rather than left to shadow a later
+// change silently.
+function setOverride(dayKey, exercise, n) {
+  const fileSets = ROUTINE.week[dayKey]?.plan.find(p => p.exercise === exercise)?.sets;
+  const day = state.setsBy[dayKey] || (state.setsBy[dayKey] = {});
+  if (n === fileSets) delete day[exercise]; else day[exercise] = n;
+  if (!Object.keys(day).length) delete state.setsBy[dayKey];
+  savePrefs();
+}
 
 function orderedPlan(dayKey, plan) {
   const want = state.order[dayKey];
@@ -905,19 +933,28 @@ function orderedPlan(dayKey, plan) {
     (rank.has(b.exercise) ? rank.get(b.exercise) : want.length + plan.indexOf(b)));
 }
 
-function saveOrder() {
+function savePrefs() {
   state.orderAt = new Date().toISOString();
   state.orderDirty = true;
   try {
     localStorage.setItem(STORE_ORDER, JSON.stringify(
       { days: state.order, updated_at: state.orderAt }));
+    localStorage.setItem(STORE_SETS, JSON.stringify(
+      { days: state.setsBy, updated_at: state.orderAt }));
   } catch { /* private mode */ }
   flushQueue();
 }
+const saveOrder = savePrefs;   // reordering and set counts share one prefs write
 function loadOrder() {
   try {
     const d = JSON.parse(localStorage.getItem(STORE_ORDER) || "null");
     if (d && d.days) { state.order = d.days; state.orderAt = d.updated_at || null; }
+    const t = JSON.parse(localStorage.getItem(STORE_SETS) || "null");
+    if (t && t.days) {
+      state.setsBy = t.days;
+      if (!state.orderAt || (t.updated_at && t.updated_at > state.orderAt))
+        state.orderAt = t.updated_at;
+    }
   } catch { /* ignore */ }
 }
 
@@ -968,16 +1005,16 @@ function renderPlan() {
   // paper over it.
   renderToday();
   const r = routine();
-  const planned = DAYS.reduce((a, d) => a + r.week[d].plan.reduce((x, p) => x + p.sets, 0), 0);
+  const planned = DAYS.reduce((a, d) => a + effectivePlan(d).reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
   // Two different kinds of edit, and conflating them is what loses work. Order is
   // stored and needs nothing further. Set counts and lift changes move a muscle's
   // weekly volume, and the bands in config.yaml are DERIVED from that - so until they
   // reach routine.yaml the bands are measuring against a plan that is not the one on
   // screen. Say which is which, and how many.
-  const structural = state.routine ? countStructuralEdits(r) : 0;
+  const structural = countStructuralEdits();
   $("plan-summary").innerHTML =
-    `<b>${scheduledLifts(r).length}</b>lifts · ${DAYS.length} days` +
+    `<b>${scheduledLifts().length}</b>lifts · ${DAYS.length} days` +
     (structural ? `<br><span style="color:var(--warn)">${structural} change${
       structural === 1 ? "" : "s"} not exported</span>` : "");
   renderPlanNote(structural);
@@ -987,14 +1024,15 @@ function renderPlan() {
 
   $("planweek").innerHTML = DAYS.map(d => {
     const day = r.week[d];
-    const n = day.plan.reduce((a, p) => a + p.sets, 0);
-    // data-i is the index in the FILE's plan, so every existing handler keeps writing to
-    // the right entry no matter how the rows are displayed.
-    const rows = orderedPlan(d, day.plan).map((p) => {
-      const i = day.plan.indexOf(p);
+    const shown = effectivePlan(d);
+    const n = shown.reduce((a, p) => a + p.sets, 0);
+    // Rows are addressed by EXERCISE NAME, not by position: the displayed plan carries
+    // overridden copies and is reordered, so an index into it no longer points at the
+    // entry the handler has to change.
+    const rows = shown.map((p) => {
       const prov = isProvisional(p.exercise), bad = !exReady(p.exercise);
       return `
-      <div class="dayrow ${bad ? "unset" : ""}" data-day="${d}" data-i="${i}">
+      <div class="dayrow ${bad ? "unset" : ""}" data-day="${d}" data-ex="${p.exercise}">
         <button class="handle" data-role="handle" aria-label="drag to reorder">&#8942;&#8942;</button>
         <input class="exin" data-role="ex" list="exlist" value="${label(p.exercise)}"
                title="${label(p.exercise)}" autocomplete="off" autocapitalize="none"
@@ -1020,10 +1058,12 @@ function renderPlan() {
   }).join("");
 
   for (const row of $("planweek").querySelectorAll(".dayrow")) {
-    const d = row.dataset.day, i = +row.dataset.i;
+    const d = row.dataset.day, ex = row.dataset.ex;
+    const at = () => (state.routine || ROUTINE).week[d].plan.findIndex(x => x.exercise === ex);
+    const cur = () => effectivePlan(d).find(x => x.exercise === ex)?.sets ?? 1;
     row.querySelector('[data-role="ex"]').onchange = (e) => {
       const typed = e.target.value;
-      const was = state.routine ? state.routine.week[d].plan[i].exercise : r.week[d].plan[i].exercise;
+      const was = ex;
       if (!typed.trim()) { renderPlan(); return; }          // blank is not an edit
       let key = resolveExercise(typed);
       let minted = false;
@@ -1034,7 +1074,7 @@ function renderPlan() {
         minted = true;
       }
       if (!key || key === was) { renderPlan(); return; }
-      ensureEditable(); state.routine.week[d].plan[i].exercise = key;
+      ensureEditable(); state.routine.week[d].plan[at()].exercise = key;
       saveRoutine(); renderPlan();
       if (minted) showFeedback(
         `<span class="l1">${label(key)} added to ${d}</span>\n` +
@@ -1049,17 +1089,18 @@ function renderPlan() {
     const def = row.querySelector('[data-role="def"]');
     if (def) wireDefPanel(def);
     row.querySelector('[data-role="inc"]').onclick = () => {
-      ensureEditable(); state.routine.week[d].plan[i].sets =
-        clamp(state.routine.week[d].plan[i].sets + 1, 1, 8);
-      saveRoutine(); renderPlan();
+      setOverride(d, ex, clamp(cur() + 1, 1, 8)); renderPlan();
     };
     row.querySelector('[data-role="dec"]').onclick = () => {
-      ensureEditable(); state.routine.week[d].plan[i].sets =
-        clamp(state.routine.week[d].plan[i].sets - 1, 1, 8);
-      saveRoutine(); renderPlan();
+      setOverride(d, ex, clamp(cur() - 1, 1, 8)); renderPlan();
     };
     row.querySelector('[data-role="rm"]').onclick = () => {
-      ensureEditable(); state.routine.week[d].plan.splice(i, 1);
+      ensureEditable(); state.routine.week[d].plan.splice(at(), 1);
+      if (state.setsBy[d]) {           // no entry left for the override to apply to
+        delete state.setsBy[d][ex];
+        if (!Object.keys(state.setsBy[d]).length) delete state.setsBy[d];
+        savePrefs();
+      }
       saveRoutine(); renderPlan();
     };
     row.querySelector('[data-role="handle"]').addEventListener("pointerdown", (e) => startDrag(e, row, d));
@@ -1159,7 +1200,7 @@ function startDrag(e, row, day) {
       // Writes the ORDER, never the routine: a reorder must not mark the plan as
       // structurally edited, because it changes no volume and needs no export - and
       // making it structural is what would get it thrown away on the next deploy.
-      const names = orderedPlan(day, routine().week[day].plan).map(p => p.exercise);
+      const names = effectivePlan(day).map(p => p.exercise);
       const [moved] = names.splice(fromIndex, 1);
       names.splice(current, 0, moved);
       state.order[day] = names;
@@ -1174,11 +1215,11 @@ function startDrag(e, row, day) {
 
 // How far the local plan has drifted from the file, counted in the units that matter:
 // a lift added or removed, and a set count changed.
-function countStructuralEdits(r) {
+function countStructuralEdits() {
   let n = 0;
   for (const d of DAYS) {
     const file = new Map(ROUTINE.week[d].plan.map(p => [p.exercise, p.sets]));
-    const now = new Map(r.week[d].plan.map(p => [p.exercise, p.sets]));
+    const now = new Map(effectivePlan(d).map(p => [p.exercise, p.sets]));
     for (const [ex, sets] of now) n += !file.has(ex) ? 1 : (file.get(ex) !== sets ? 1 : 0);
     for (const ex of file.keys()) if (!now.has(ex)) n += 1;
   }
@@ -1211,12 +1252,11 @@ function renderPlanNote(structural) {
 
 // Derived, never carried: analyze.py requires lifts and the schedule to agree exactly,
 // and the stored `lifts` list goes stale the moment a lift is added in the browser.
-const scheduledLifts = (r) =>
-  [...new Set(DAYS.flatMap(d => r.week[d].plan.map(p => p.exercise)))].sort();
+const scheduledLifts = () =>
+  [...new Set(DAYS.flatMap(d => effectivePlan(d).map(p => p.exercise)))].sort();
 
 function exportYaml() {
-  const r = routine();
-  const scheduled = scheduledLifts(r);
+  const scheduled = scheduledLifts();
   const out = $("yamlout");
   out.hidden = false;
 
@@ -1253,9 +1293,9 @@ function exportYaml() {
   }
   lines.push("lifts:", ...scheduled.map(l => `  - ${l}`), "", "week:");
   for (const d of DAYS) {
-    const day = r.week[d];
-    lines.push(`  ${d}:`, `    name: ${day.name}`, "    plan:");
-    for (const p of day.plan) lines.push(`      - {exercise: ${p.exercise}, sets: ${p.sets}}`);
+    lines.push(`  ${d}:`, `    name: ${routine().week[d].name}`, "    plan:");
+    for (const p of effectivePlan(d))
+      lines.push(`      - {exercise: ${p.exercise}, sets: ${p.sets}}`);
   }
   out.textContent = lines.join("\n");
 }
@@ -1337,17 +1377,22 @@ async function pullRemote() {
   // The order is one small document, not part of the session window. Last write wins by
   // timestamp; a local change not yet flushed is by definition newer and is left alone.
   try {
-    const snap = await DB.doc("prefs/order").get();
-    const d = snap.exists ? snap.data() : null;
-    if (d && d.days && !state.orderDirty &&
-        (!state.orderAt || String(d.updated_at) > state.orderAt)) {
-      state.order = d.days;
-      state.orderAt = d.updated_at || null;
-      try { localStorage.setItem(STORE_ORDER,
-        JSON.stringify({ days: state.order, updated_at: state.orderAt })); }
-      catch { /* private mode */ }
+    const [o, t] = await Promise.all([
+      DB.doc("prefs/order").get(), DB.doc("prefs/sets").get()]);
+    const od = o.exists ? o.data() : null, td = t.exists ? t.data() : null;
+    const stamp = String(od?.updated_at || td?.updated_at || "");
+    if (!state.orderDirty && stamp && (!state.orderAt || stamp > state.orderAt)) {
+      if (od?.days) state.order = od.days;
+      if (td?.days) state.setsBy = td.days;
+      state.orderAt = stamp;
+      try {
+        localStorage.setItem(STORE_ORDER,
+          JSON.stringify({ days: state.order, updated_at: state.orderAt }));
+        localStorage.setItem(STORE_SETS,
+          JSON.stringify({ days: state.setsBy, updated_at: state.orderAt }));
+      } catch { /* private mode */ }
     }
-  } catch { /* order is cosmetic - never fail a sync over it */ }
+  } catch { /* prefs are a convenience - never fail a sync over them */ }
 }
 
 // One date at a time, stopping at the first failure so the queue keeps its order and
@@ -1380,6 +1425,8 @@ async function flushQueue() {
       try {
         await DB.doc("prefs/order").set(
           { days: state.order, updated_at: state.orderAt, schema: 1 });
+        await DB.doc("prefs/sets").set(
+          { days: state.setsBy, updated_at: state.orderAt, schema: 1 });
         state.orderDirty = false;
       } catch (e) { setSync("error", dbErr(e)); flushing = false; return; }
     }
@@ -1838,7 +1885,8 @@ $("btn-reset").onclick = () => {
     state.routine = null;
     state.dropped = 0;
     state.order = {};
-    saveOrder();
+    state.setsBy = {};
+    savePrefs();
     try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
     $("yamlout").hidden = true;
     renderPlan();
