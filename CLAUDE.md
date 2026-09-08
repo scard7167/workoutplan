@@ -221,6 +221,23 @@ analytics. The store is where sessions wait until they reach it. A session in th
 but not yet in `log.csv` is still removable in the app; once it is in `log.csv` it is
 history and immutable.
 
+### Editing the plan on the phone
+
+Two kinds of edit, and conflating them loses work:
+
+- **Exercise order is cosmetic.** It moves nothing between muscles, so it changes no
+  volume and no band. It is therefore owned by the phone: stored as a list of exercise
+  NAMES per day (`strengthlog.order.v1`, synced to `prefs/order`), applied over whatever
+  `routine.yaml` currently says. Because it is by name and not by position, it survives a
+  publish - a lift the file drops falls out, a lift the file adds lands at the end. It
+  never needs to reach the repo.
+- **Set counts, added and removed lifts change weekly volume**, and `config.yaml`'s bands
+  are DERIVED from that. Until such an edit reaches `routine.yaml` the bands are
+  measuring a plan that is not the one on screen, so these still go through
+  `Export routine.yaml` and a paste. They are also tied to the `routine.yaml` they were
+  made against and are dropped when a newer one ships - the Plan tab says so out loud
+  rather than letting a set-count change vanish unannounced.
+
 ### Provisional exercises
 
 The Plan tab's exercise field takes free text, and the photo dump proposes machines from

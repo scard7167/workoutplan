@@ -168,6 +168,7 @@
         <div id="scanout"></div>
       </section>
 
+      <div class="scannote" id="plannote" hidden></div>
       <div id="planweek"></div>
       <datalist id="exlist"></datalist>
       <div class="actions">
@@ -178,7 +179,8 @@
       <p class="fineprint">
         Edits live in this browser. Export and paste into <code>routine.yaml</code> to make
         them the plan of record - the CLI, the prescriptions and the volume bands all read
-        that file. The exercise field takes <b>free text</b>: a name the library knows
+        that file. <b>Exercise order is the exception</b>: it changes no volume, so it is
+        stored as yours and survives a new publish without any of this. The exercise field takes <b>free text</b>: a name the library knows
         resolves to it, anything else becomes a lift of this browser's own. Such a lift is
         planned but inert - no prescription, no logging - until its increment and rep range
         are set, because those two numbers decide every load it will ever be given. Export

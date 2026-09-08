@@ -40,6 +40,10 @@ const state = {
   photos: [],        // machine photos waiting to be identified (this session only)
   proposals: null,   // what Claude read off them, pending your confirmation
   remote: [],        // sessions pulled from the store - see `sync` below
+  order: {},         // per-day exercise ORDER, owned by the phone - see below
+  orderAt: null,     // when this device last changed the order
+  orderDirty: false, // order changed but not yet in the store
+  dropped: 0,        // set-count edits discarded because a newer plan shipped
   queue: [],         // dates written here but not yet in the store
   sync: "off",       // off | idle | pending | error
   syncCode: null,
@@ -289,7 +293,7 @@ function slotCount(p) {
 function renderToday() {
   const day = todayKey();
   const entry = routine().week[day];
-  const plan = entry.plan;
+  const plan = orderedPlan(day, entry.plan);
   const d = new Date();
   d.setDate(d.getDate() + state.dayOffset);
   const dayText = d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
@@ -869,9 +873,54 @@ function loadRoutine() {
     // one has shipped since, the stored copy is dropped and the file wins - otherwise
     // any device that ever opened the Plan tab would be pinned to that old snapshot
     // forever and would silently never see a deployed routine change again.
-    if (d && d.base === routineFingerprint(ROUTINE) && d.routine) state.routine = d.routine;
+    if (!d || !d.routine) return;
+    if (d.base === routineFingerprint(ROUTINE)) { state.routine = d.routine; return; }
+    // A newer routine.yaml has shipped. The stored structural edits were made against a
+    // plan that no longer exists, so they cannot be carried over - but saying nothing is
+    // how a set-count change disappears without anyone noticing. Count it and show it.
+    state.dropped = DAYS.reduce((n, k) =>
+      n + (d.routine.week?.[k]?.plan?.length || 0), 0);
+    try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
   } catch { /* ignore */ }
 }
+// ------------------------------------------------- the order of a day's lifts
+// Reordering is COSMETIC: it moves nothing between muscles, so it changes no volume and
+// therefore no band. That makes it the one plan edit the phone can own outright - it
+// never has to reach routine.yaml, and unlike a set-count change it is not invalidated
+// when a new routine.yaml ships.
+//
+// It is stored as a list of exercise NAMES per day, not as positions, so it survives a
+// deploy: a lift the file dropped simply falls out of the list, and one the file added
+// lands at the end rather than silently displacing something.
+const STORE_ORDER = "strengthlog.order.v1";
+
+function orderedPlan(dayKey, plan) {
+  const want = state.order[dayKey];
+  if (!Array.isArray(want) || !want.length) return plan;
+  const rank = new Map(want.map((e, i) => [e, i]));
+  // Stable: anything the stored order has never seen keeps its file position, after
+  // everything it does know about.
+  return [...plan].sort((a, b) =>
+    (rank.has(a.exercise) ? rank.get(a.exercise) : want.length + plan.indexOf(a)) -
+    (rank.has(b.exercise) ? rank.get(b.exercise) : want.length + plan.indexOf(b)));
+}
+
+function saveOrder() {
+  state.orderAt = new Date().toISOString();
+  state.orderDirty = true;
+  try {
+    localStorage.setItem(STORE_ORDER, JSON.stringify(
+      { days: state.order, updated_at: state.orderAt }));
+  } catch { /* private mode */ }
+  flushQueue();
+}
+function loadOrder() {
+  try {
+    const d = JSON.parse(localStorage.getItem(STORE_ORDER) || "null");
+    if (d && d.days) { state.order = d.days; state.orderAt = d.updated_at || null; }
+  } catch { /* ignore */ }
+}
+
 function saveRoutine() {
   try {
     localStorage.setItem(STORE_ROUTINE, JSON.stringify(
@@ -921,9 +970,17 @@ function renderPlan() {
   const r = routine();
   const planned = DAYS.reduce((a, d) => a + r.week[d].plan.reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
+  // Two different kinds of edit, and conflating them is what loses work. Order is
+  // stored and needs nothing further. Set counts and lift changes move a muscle's
+  // weekly volume, and the bands in config.yaml are DERIVED from that - so until they
+  // reach routine.yaml the bands are measuring against a plan that is not the one on
+  // screen. Say which is which, and how many.
+  const structural = state.routine ? countStructuralEdits(r) : 0;
   $("plan-summary").innerHTML =
     `<b>${scheduledLifts(r).length}</b>lifts · ${DAYS.length} days` +
-    (state.routine ? `<br><span style="color:var(--warn)">edited, not exported</span>` : "");
+    (structural ? `<br><span style="color:var(--warn)">${structural} change${
+      structural === 1 ? "" : "s"} not exported</span>` : "");
+  renderPlanNote(structural);
 
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
@@ -931,7 +988,10 @@ function renderPlan() {
   $("planweek").innerHTML = DAYS.map(d => {
     const day = r.week[d];
     const n = day.plan.reduce((a, p) => a + p.sets, 0);
-    const rows = day.plan.map((p, i) => {
+    // data-i is the index in the FILE's plan, so every existing handler keeps writing to
+    // the right entry no matter how the rows are displayed.
+    const rows = orderedPlan(d, day.plan).map((p) => {
+      const i = day.plan.indexOf(p);
       const prov = isProvisional(p.exercise), bad = !exReady(p.exercise);
       return `
       <div class="dayrow ${bad ? "unset" : ""}" data-day="${d}" data-i="${i}">
@@ -1096,17 +1156,57 @@ function startDrag(e, row, day) {
     row.removeEventListener("pointerup", onUp);
     row.removeEventListener("pointercancel", onUp);
     if (current !== fromIndex) {
-      ensureEditable();
-      const plan = state.routine.week[day].plan;
-      const [item] = plan.splice(fromIndex, 1);
-      plan.splice(current, 0, item);
-      saveRoutine();
+      // Writes the ORDER, never the routine: a reorder must not mark the plan as
+      // structurally edited, because it changes no volume and needs no export - and
+      // making it structural is what would get it thrown away on the next deploy.
+      const names = orderedPlan(day, routine().week[day].plan).map(p => p.exercise);
+      const [moved] = names.splice(fromIndex, 1);
+      names.splice(current, 0, moved);
+      state.order[day] = names;
+      saveOrder();
     }
     renderPlan();
   }
   row.addEventListener("pointermove", onMove);
   row.addEventListener("pointerup", onUp);
   row.addEventListener("pointercancel", onUp);
+}
+
+// How far the local plan has drifted from the file, counted in the units that matter:
+// a lift added or removed, and a set count changed.
+function countStructuralEdits(r) {
+  let n = 0;
+  for (const d of DAYS) {
+    const file = new Map(ROUTINE.week[d].plan.map(p => [p.exercise, p.sets]));
+    const now = new Map(r.week[d].plan.map(p => [p.exercise, p.sets]));
+    for (const [ex, sets] of now) n += !file.has(ex) ? 1 : (file.get(ex) !== sets ? 1 : 0);
+    for (const ex of file.keys()) if (!now.has(ex)) n += 1;
+  }
+  return n;
+}
+
+function renderPlanNote(structural) {
+  const el = $("plannote");
+  if (!el) return;
+  const bits = [];
+  if (state.dropped)
+    bits.push(`<b>A newer plan was published.</b> Set-count and lift edits made against ` +
+      `the old one could not be carried over and were dropped; your <b>order is kept</b>. ` +
+      `Redo them below if you still want them.`);
+  if (structural)
+    bits.push(`<b>${structural} change${structural === 1 ? "" : "s"} live only in this ` +
+      `browser.</b> Set counts and lift changes move a muscle's weekly volume, and the ` +
+      `bands are derived from <code>routine.yaml</code> - until you Export and paste ` +
+      `them in, the bands are measuring a different plan. A new publish will drop them.`);
+  if (!bits.length && Object.keys(state.order).length)
+    bits.push(state.sync === "off"
+      ? `Your exercise order is saved in this browser. It survives a new publish; set ` +
+        `counts and lift changes still need Export.`
+      : `Your exercise order is stored and follows you across devices. It survives a new ` +
+        `publish - only set counts and lift changes need Export.`);
+  el.hidden = !bits.length;
+  el.className = "scannote" + (state.dropped ? " bad" : "");
+  el.innerHTML = bits.join("<br><br>");
 }
 
 // Derived, never carried: analyze.py requires lifts and the schedule to agree exactly,
@@ -1234,13 +1334,27 @@ async function pullRemote() {
   } catch (e) {
     setSync("error", dbErr(e));
   }
+  // The order is one small document, not part of the session window. Last write wins by
+  // timestamp; a local change not yet flushed is by definition newer and is left alone.
+  try {
+    const snap = await DB.doc("prefs/order").get();
+    const d = snap.exists ? snap.data() : null;
+    if (d && d.days && !state.orderDirty &&
+        (!state.orderAt || String(d.updated_at) > state.orderAt)) {
+      state.order = d.days;
+      state.orderAt = d.updated_at || null;
+      try { localStorage.setItem(STORE_ORDER,
+        JSON.stringify({ days: state.order, updated_at: state.orderAt })); }
+      catch { /* private mode */ }
+    }
+  } catch { /* order is cosmetic - never fail a sync over it */ }
 }
 
 // One date at a time, stopping at the first failure so the queue keeps its order and
 // nothing is dropped on a flaky connection. A date with no local rows means the session
 // was removed here, so the document goes too.
 async function flushQueue() {
-  if (!DB || flushing || !state.queue.length) return;
+  if (!DB || flushing || (!state.queue.length && !state.orderDirty)) return;
   flushing = true;
   setSync("pending");
   try {
@@ -1261,6 +1375,13 @@ async function flushQueue() {
       }
       state.queue = state.queue.filter(d => d !== date);
       saveQueue();
+    }
+    if (state.orderDirty) {
+      try {
+        await DB.doc("prefs/order").set(
+          { days: state.order, updated_at: state.orderAt, schema: 1 });
+        state.orderDirty = false;
+      } catch (e) { setSync("error", dbErr(e)); flushing = false; return; }
     }
     await pullRemote();
     setSync("idle");
@@ -1313,7 +1434,9 @@ async function openStore() {
   setSync("idle");
   await pullRemote();
   await flushQueue();
-  renderToday(); renderTrends();
+  // renderPlan too: a pull can bring back an exercise order this device did not have
+  // (a fresh browser, or a cleared cache), and the Plan tab is rendered once at boot.
+  renderToday(); renderTrends(); renderPlan();
 }
 
 // ------------------------------------------------------------ photo dump
@@ -1711,8 +1834,11 @@ for (const b of document.querySelectorAll("#volseg button")) {
 }
 $("btn-yaml").onclick = exportYaml;
 $("btn-reset").onclick = () => {
-  if (confirm("Discard your edits and reload routine.yaml as published?")) {
+  if (confirm("Discard your edits - set counts, lifts AND your exercise order - and reload routine.yaml as published?")) {
     state.routine = null;
+    state.dropped = 0;
+    state.order = {};
+    saveOrder();
     try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
     $("yamlout").hidden = true;
     renderPlan();
@@ -1724,6 +1850,7 @@ loadProvisional();   // before anything renders: the routine may name one of the
 loadRoutine();
 loadCommitted();
 loadQueue();
+loadOrder();
 loadSession();
 selectTab("today");
 renderToday();

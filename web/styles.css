@@ -372,6 +372,7 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .scannote b { color: var(--ink-2); font-weight: 500; }
 .scannote code { font: 400 10.5px var(--mono); color: var(--ink-2); }
 #syncnote { margin-top: 12px; }
+#plannote { margin: 0 0 14px; }
 
 #scanqueue { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 #scanqueue:empty { margin-top: 0; }
