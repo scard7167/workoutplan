@@ -1,4 +1,4 @@
-# The plan. 22 lifts, rotated across 7 short sessions a week.
+# The plan. 27 lifts, rotated across 7 short sessions a week.
 #
 # This is the counterpart to log.csv: the routine says what SHOULD happen, the log
 # says what did. Every analytic that talks about adherence compares the two.
@@ -41,6 +41,11 @@ lifts:
   - biceps_machine
   - horizontal_biceps_machine
   - triceps_machine
+  - leg_press_machine
+  - leg_extension_machine
+  - seated_leg_curl_machine
+  - hip_abduction_machine
+  - hip_thrust_machine
   - lateral_raise_machine
   - dip_machine
   - overhead_triceps_machine
@@ -75,12 +80,22 @@ week:
       - {exercise: horizontal_biceps_machine, sets: 2}
       - {exercise: triceps_machine, sets: 2}
   wed:
-    name: hinge + core
+    # Was "hinge + core" (RDL, hanging leg raise, lateral raise, chest supported row).
+    # Rebuilt as a LEG day on the gym80 machines. This is a deliberate reversal of a
+    # design constraint at the top of this file: quads were uncovered BY DESIGN because
+    # the cycling and running already load them. They are now trained here, so quads has
+    # come out of uncovered_by_design in config.yaml and is measured like any other
+    # muscle. Recovery, not gym time, is still the binding constraint.
+    # romanian_deadlift, lateral_raise and chest_supported_row all still appear on other
+    # days, so no muscle lost its only lift; hanging_leg_raise stays as the core slot.
+    name: legs (gym80)
     plan:
-      - {exercise: romanian_deadlift, sets: 3}
+      - {exercise: leg_press_machine, sets: 3}
+      - {exercise: leg_extension_machine, sets: 3}
+      - {exercise: seated_leg_curl_machine, sets: 3}
+      - {exercise: hip_thrust_machine, sets: 2}
+      - {exercise: hip_abduction_machine, sets: 2}
       - {exercise: hanging_leg_raise, sets: 3}
-      - {exercise: lateral_raise, sets: 3}
-      - {exercise: chest_supported_row, sets: 2}
   thu:
     name: heavy pair
     plan:

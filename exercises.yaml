@@ -255,6 +255,59 @@ triceps_machine:
   rep_range: [10, 15]
   image: images/triceps_machine.jpg
 
+leg_press_machine:
+  # gym80 Sygnum 3031 "Beinpresse liegend" - lying plate-stack leg press. The product
+  # copy names "Oberschenkelmuskulatur und Gluteus", so quads and glutes are co-primary,
+  # exactly as back_squat is.
+  aliases: [gym80 3031, beinpresse liegend, beinpresse, leg press, leg press machine]
+  muscles: [quads, glutes]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/leg_press_machine.jpg
+
+leg_extension_machine:
+  # gym80 Sygnum Combo 5013 "Beinbeuger und Beinstrecker Combo". The machine does BOTH
+  # movements, but one canonical name cannot carry both: a knee extension and a knee
+  # flexion are different lifts and averaging their loads into one e1RM series is
+  # meaningless. This entry is the EXTENSION half only. If the curl half of 5013 gets
+  # used rather than 3003, that is a different stack again and needs its own entry - ask.
+  aliases: [gym80 5013, beinstrecker, leg extension, knee extension, leg extension machine]
+  muscles: [quads]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 15]
+  image: images/leg_extension_machine.jpg
+
+seated_leg_curl_machine:
+  # gym80 Sygnum 3003 "Beinbeuger sitzend" - seated plate-stack leg curl. Dedicated
+  # machine, so it carries the hamstring work rather than 5013's curl half.
+  aliases: [gym80 3003, beinbeuger sitzend, beinbeuger, seated leg curl, leg curl,
+            leg curl machine]
+  muscles: [hamstrings]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 15]
+  image: images/seated_leg_curl_machine.jpg
+
+hip_abduction_machine:
+  # gym80 Sygnum Combo 5011 "Abduktion und Adduktion Combo". Credited to glutes for the
+  # ABDUCTION half (gluteus medius). The adduction half trains the adductors, which are
+  # not a group in this log's taxonomy - that work is real but uncounted, the same way
+  # indirect work is. Do not invent an `adductors` group to fix this; raise it instead.
+  aliases: [gym80 5011, abduktion und adduktion, abduktion, adduktion, hip abduction,
+            abduction machine, hip abduction machine]
+  muscles: [glutes]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [12, 18]
+  image: images/hip_abduction_machine.jpg
+
+hip_thrust_machine:
+  # gym80 Sygnum 4416 "Bootymizer" - plate-stack hip thrust. "Training der
+  # Gesaessmuskulatur", so glutes only.
+  aliases: [gym80 4416, bootymizer, hip thrust, hip thrust machine, glute machine]
+  muscles: [glutes]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/hip_thrust_machine.jpg
+
 lateral_raise_machine:
   # gym80 Sygnum 3050 "Seithebemaschine" - plate-stack lateral raise, independent arms.
   # Not the same unit as lateral_raise (DB) or cable_lateral_raise.

@@ -6,9 +6,11 @@ one-line output.
 
 Training context: 7 short strength sessions/week, full gym, hypertrophy + robustness,
 alongside 30-50 km/week cycling and running that this log never sees. Recovery is the
-binding constraint, not gym time - sessions run 10-12 working sets, not 20+. Legs are
-already loaded by the cardio; quads and calves are uncovered by design (see
-`uncovered_by_design` in config.yaml) and are never a reason to add leg work here.
+binding constraint, not gym time - sessions were sized at 10-12 working sets, though the
+gym80 days now run 16-18. The cycling already loads the legs, so `calves` is uncovered by
+design (see `uncovered_by_design` in config.yaml) and is never a reason to add calf work
+here. **Quads were uncovered too until 2026-09-09**, when a direct leg day was added to
+Wednesday at the user's request - they are now trained and measured like anything else.
 
 ## Files
 
@@ -62,8 +64,8 @@ say so, do not pick one.
 `log.csv` is what actually happened. `config.yaml`'s `volume_targets` are DERIVED from
 the routine - the target is what the routine delivers when followed as written, min/max
 are tolerance either side. Change the routine and the bands move with it, never the
-other way. `quads` and `calves` have no routine lift and are marked
-`uncovered_by_design`: reported, never flagged RED, never a reason to add leg work.
+other way. `calves` has no routine lift and is marked
+`uncovered_by_design`: reported, never flagged RED, never a reason to add calf work.
 
 Editing the routine (in `routine.yaml` directly, or in the web app's Plan tab, exported
 and pasted back) requires asking first if it removes a muscle's only lift - the same
@@ -272,7 +274,8 @@ the bands in `config.yaml` sit below the numbers the literature quotes - triceps
 delts already get plenty from pressing. Do not raise the bands to match a paper that
 counts indirect stimulus.
 
-Lower-body bands are deliberately conservative because of the cycling.
+Lower-body bands are deliberately conservative because of the cycling - that holds even
+now quads are trained directly.
 
 ## Hard rules
 
@@ -286,8 +289,10 @@ Lower-body bands are deliberately conservative because of the cycling.
   export. Read it off the machine or leave it blank.
 - If a metric is not built, **say so**. Never compute it ad hoc from the CSV - and if a
   new metric is added, it goes in `analyze.py` first, never only in `web/app.js`.
-- Never recommend more leg volume on the basis of this log alone. `quads` and `calves`
-  are uncovered by design; their report line is UNCOVERED, never RED.
+- Never recommend more leg volume on the basis of this log alone. The cycling and
+  running are not in it, so this log cannot see what the legs already carry. That the
+  user has since chosen to add a leg day does not license recommending more.
+  `calves` is uncovered by design; its report line is UNCOVERED, never RED.
 - `web/data.js` and `web/analytics.json` are generated files. Never hand-edit them -
   run `python3 web/build_data.py` after changing `exercises.yaml`, `config.yaml`,
   `routine.yaml` or `log.csv`.

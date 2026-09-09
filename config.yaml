@@ -21,21 +21,24 @@ athlete:
 # work on the basis of this log.
 volume_targets:
   chest:        {min: 13, target: 15, max: 19}
-  lats:         {min: 10, target: 14, max: 18}
-  upper_back:   {min: 3,  target: 5,  max: 8}
+  lats:         {min: 8,  target: 12, max: 16}
+  upper_back:   {min: 1,  target: 3,  max: 6}
   front_delts:  {min: 4,  target: 6,  max: 8}
-  side_delts:   {min: 13, target: 15, max: 19}
+  side_delts:   {min: 10, target: 12, max: 16}
   rear_delts:   {min: 6,  target: 8,  max: 11}
   biceps:       {min: 7,  target: 8,  max: 11}
   triceps:      {min: 9,  target: 10, max: 13}
-  quads:        {min: 0,  target: 0,  max: 6}
+  quads:        {min: 4,  target: 6,  max: 10}
   hamstrings:   {min: 4,  target: 6,  max: 8}
-  glutes:       {min: 4,  target: 6,  max: 8}
+  glutes:       {min: 8,  target: 10, max: 12}
   calves:       {min: 0,  target: 0,  max: 5}
   core:         {min: 4,  target: 5,  max: 8}
 
 # Muscles no routine lift trains directly. Reported as UNCOVERED, never as a deficit.
-uncovered_by_design: [quads, calves]
+# quads came OUT on 2026-09-09: the Wednesday gym80 leg day trains them directly, so
+# they are measured like anything else. Calves remain uncovered - nothing in the routine
+# trains them and the cycling does.
+uncovered_by_design: [calves]
 
 progression:
   # Double progression. This is the ONLY source of load prescriptions.
