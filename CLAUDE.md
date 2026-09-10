@@ -223,6 +223,27 @@ analytics. The store is where sessions wait until they reach it. A session in th
 but not yet in `log.csv` is still removable in the app; once it is in `log.csv` it is
 history and immutable.
 
+### Paging through days on Today
+
+Today steps a day at a time in either direction (`‹` / `›`, plus a `today` button once
+off zero). Two dates are now distinct and must stay so:
+
+- **the day being VIEWED** - `state.dayOffset`, signed, and `state.date` derived from it.
+  The weekday comes from `state.date` via `weekdayOf()`, never from today plus an offset:
+  JS `%` is a remainder, not a modulo, so the old form broke outright going backwards.
+- **the day the open session belongs to** - `state.sessionDate`. Paging must never
+  re-date sets that are already typed, so the sets carry their own date and survive a
+  reload as that date, whatever is on screen.
+
+A day with logged sets is **history**: it renders what was logged, read-only, and says
+`logged`. Editing a past session is a correction, and corrections are stated out loud one
+row at a time - never made by overtyping a box. A day with nothing logged is still open,
+which is what lets a forgotten session be entered late; logging is refused only when an
+unsubmitted session for a DIFFERENT day is open, so sets cannot land on the wrong date.
+The viewed day's rows are its weekday's plan plus anything logged that day the plan no
+longer contains, so a lift dropped from the routine does not take its logged sets out of
+view with it.
+
 ### Editing the plan on the phone
 
 Two kinds of edit, and conflating them loses work:

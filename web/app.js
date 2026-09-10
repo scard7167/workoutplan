@@ -27,9 +27,14 @@ const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const state = {
-  dayOffset: 0,      // days ahead of the real date; Submit advances it to the next day
+  // dayOffset is the day being VIEWED, signed: negative is the past. sessionDate is the
+  // day `sets` belongs to. They were one thing when Today could only look forward from
+  // an open session; now that you can page back through history they cannot be, or
+  // stepping to yesterday would re-date the sets you have open for today.
+  dayOffset: 0,
   date: "",          // derived from dayOffset - always set via setDay()
   sets: [],
+  sessionDate: null, // the date `sets` belongs to; null when there are none
   committed: [],     // sessions submitted on this device, not yet in an analyze.py run
   sticky: null,
   window: 7,
@@ -136,6 +141,12 @@ function isoDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
          `${String(d.getDate()).padStart(2, "0")}`;
 }
+// Parsed as local date parts, so the weekday cannot shift by a timezone.
+const weekdayOf = (iso) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return DAYS[(new Date(y, m - 1, d).getDay() + 6) % 7];
+};
+
 function setDay(offset) {
   state.dayOffset = offset;
   const d = new Date();
@@ -153,7 +164,7 @@ function routineFingerprint(r) {
   for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
   return String(h);
 }
-const todayKey = () => DAYS[((new Date().getDay() + 6) % 7 + state.dayOffset) % 7];
+const todayKey = () => weekdayOf(state.date);
 const label = (e) => e.replace(/_/g, " ");
 
 // --------------------------------------------------- the progression rule
@@ -280,39 +291,85 @@ function sparkline(values, w = 120, h = 26) {
 // Plan tab set, and nothing in Today can change it. A slot's position IS its set_no;
 // clearing one un-logs that set without renumbering its neighbours.
 //
-// The Math.max is a data guard, not a feature: it only fires if a stored session holds
-// more logged sets than the plan now allows (the plan was cut after they were logged),
-// and exists so logged data is never hidden. Nothing here can create that state.
+// Everything already logged on the day being viewed, from wherever it is held.
+const loggedOn = (date) => history().filter(r => r.date === date);
+
+// A day that already has logged sets is HISTORY: it is shown, not typed into. Editing a
+// past session is a correction, and corrections are stated out loud one row at a time
+// (CLAUDE.md), never made by quietly overtyping a box. A day with nothing logged is
+// still open - which is what makes it possible to enter a session you forgot - unless an
+// unsubmitted session for a different day is open, in which case that one has to be
+// resolved first rather than silently mixed into this date.
+const dayIsHistory = () => loggedOn(state.date).length > 0;
+const dayEditable = () =>
+  !dayIsHistory() && (state.sessionDate === null || state.sessionDate === state.date);
+
+// The rows to show for one lift on the viewed day: the open session's, or history's.
+const setsShown = (exercise) => dayIsHistory()
+  ? loggedOn(state.date).filter(r => r.exercise === exercise)
+      .sort((a, b) => a.set_no - b.set_no)
+  : (state.sessionDate === state.date
+      ? state.sets.filter(s => s.exercise === exercise) : []);
+
 function loggedFor(exercise) {
-  return state.sets.filter(s => s.exercise === exercise).length;
+  return setsShown(exercise).length;
 }
 
+// The Math.max is a data guard, not a feature: it only fires if the day holds more
+// logged sets than the plan now allows (the plan was cut after they were logged), and
+// exists so logged data is never hidden. Nothing here can create that state.
 function slotCount(p) {
   return Math.max(p.sets, loggedFor(p.exercise));
+}
+
+// The viewed day's rows: its weekday's plan, plus anything actually logged that day that
+// the plan no longer contains - otherwise a lift dropped from the routine since would
+// take its logged sets out of view with it.
+function viewPlan() {
+  const base = effectivePlan(todayKey());
+  const logged = loggedOn(state.date);
+  if (!logged.length) return base;
+  const have = new Set(base.map(p => p.exercise));
+  const extra = [...new Set(logged.map(r => r.exercise))]
+    .filter(e => !have.has(e)).sort()
+    .map(e => ({ exercise: e, sets: logged.filter(r => r.exercise === e).length }));
+  return [...base, ...extra];
 }
 
 function renderToday() {
   const day = todayKey();
   const entry = routine().week[day];
-  const plan = effectivePlan(day);
-  const d = new Date();
-  d.setDate(d.getDate() + state.dayOffset);
-  const dayText = d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
-  // Submitting moves the plan on without the calendar moving, so say so plainly and
-  // give a way back - anything logged while ahead is dated to the day being shown.
-  $("today-day").innerHTML = state.dayOffset === 0
-    ? dayText
-    : `${dayText} <span class="ahead">+${state.dayOffset}d ahead</span> ` +
-      `<button class="backtoday" id="btn-backtoday">back to today</button>`;
-  if (state.dayOffset !== 0)
+  const plan = viewPlan();
+  const history_ = dayIsHistory();
+  const editable = dayEditable();
+  const [yy, mm, dd] = state.date.split("-").map(Number);
+  const dayText = new Date(yy, mm - 1, dd)
+    .toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
+
+  // Step a day at a time in either direction. Submitting still moves the plan on without
+  // the calendar moving, so an offset is stated plainly with a way back to today.
+  const off = state.dayOffset;
+  $("today-day").innerHTML =
+    `<button class="dnav" id="btn-prevday" aria-label="previous day">&lsaquo;</button>` +
+    `<span class="dlabel">${dayText}</span>` +
+    `<button class="dnav" id="btn-nextday" aria-label="next day">&rsaquo;</button>` +
+    (off === 0 ? "" :
+      ` <span class="ahead">${off > 0 ? `+${off}d ahead` : `${-off}d back`}</span> ` +
+      `<button class="backtoday" id="btn-backtoday">today</button>`) +
+    (history_ ? ` <span class="ahead">logged</span>` : "");
+  const step = (n) => { setDay(state.dayOffset + n); saveSession(); renderToday(); };
+  $("btn-prevday").onclick = () => step(-1);
+  $("btn-nextday").onclick = () => step(1);
+  if (off !== 0)
     $("btn-backtoday").onclick = () => { setDay(0); saveSession(); renderToday(); };
   $("today-name").textContent = entry.name;
 
   const planned = plan.reduce((a, p) => a + p.sets, 0);
+  const onDay = plan.reduce((a, p) => a + loggedFor(p.exercise), 0);
   const done = plan.reduce((a, p) => a + Math.min(p.sets, loggedFor(p.exercise)), 0);
-  const extra = state.sets.length - done;
+  const extra = onDay - done;
   $("today-progress").innerHTML =
-    `<b>${state.sets.length}<span style="color:var(--muted)">/${planned}</span></b>sets logged` +
+    `<b>${onDay}<span style="color:var(--muted)">/${planned}</span></b>sets logged` +
     (extra > 0 ? `<br><span style="color:var(--warn)">${extra} off plan</span>` : "");
 
   $("today-plan").innerHTML = plan.map(p => {
@@ -331,8 +388,8 @@ function renderToday() {
     // prescription before that. The number beside it is the PLANNED set count, matching
     // the boxes below and the Plan tab; it is not the rep target, which sits in the
     // muted line under it since reps are never entered here anyway.
-    const today = state.sets.filter(s => s.exercise === p.exercise);
-    const top = today.length ? Math.max(...today.map(s => s.weight_kg)) : null;
+    const onThis = setsShown(p.exercise);
+    const top = onThis.length ? Math.max(...onThis.map(s => s.weight_kg)) : null;
     const headline = top === null ? placeholder : fmtW(top, p.exercise);
 
     // Last session's weight per set, greyed under each box - the number to beat.
@@ -340,13 +397,13 @@ function renderToday() {
     const ready = exReady(p.exercise);
     const slots = Array.from({ length: slotCount(p) }, (_, i) => {
       const setNo = i + 1;
-      const logged = state.sets.find(s => s.exercise === p.exercise && s.set_no === setNo);
+      const logged = onThis.find(s => s.set_no === setNo);
       const prev = prior && prior.find(s => s.set_no === setNo);
       return `<div class="slot ${logged ? "filled" : ""}">
         <span class="slotn">${setNo}</span>
         <input type="text" inputmode="decimal" class="slotw" data-ex="${p.exercise}" data-set="${setNo}"
-               placeholder="${placeholder}" value="${logged ? +logged.weight_kg : ""}"
-               ${ready ? "" : "disabled"}
+               placeholder="${editable ? placeholder : "&ndash;"}" value="${logged ? +logged.weight_kg : ""}"
+               ${ready && editable ? "" : "disabled"}
                aria-label="${label(p.exercise)} set ${setNo} weight">
         <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
       </div>`;
@@ -368,13 +425,24 @@ function renderToday() {
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
         <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
       </div>
-      <span class="why ${rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
-        rx.reason === "needs setup"
-          ? "no increment or rep range yet &middot; set it in Plan"
-          : `${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}` +
-            ` &middot; ${rx.target_reps} reps`}</span>
+      <span class="why ${history_ ? "" : rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
+        history_
+          ? (onThis.length
+              ? `logged ${onThis.length} set${onThis.length === 1 ? "" : "s"} ` +
+                `&middot; ${onThis[0].reps} reps`
+              : "not logged this day")
+          : rx.reason === "needs setup"
+            ? "no increment or rep range yet &middot; set it in Plan"
+            : `${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}` +
+              ` &middot; ${rx.target_reps} reps`}</span>
       <div class="slots">${legend}${slots}</div></li>`;
   }).join("");
+
+  // Submit and Discard act on the OPEN session. On a day that is already history there
+  // is none, and leaving them live would answer "Submit" on a day showing ten logged
+  // sets with "nothing logged".
+  $("btn-submit").disabled = history_;
+  $("btn-clear").disabled = history_;
 
   for (const li of $("today-plan").querySelectorAll("li")) {
     const ex = li.dataset.ex;
@@ -421,11 +489,26 @@ function commitSlot(exercise, setNo, raw) {
   if (trimmed === "") {
     if (existing === -1) return;
     const [dropped] = state.sets.splice(existing, 1);
+    if (!state.sets.length) state.sessionDate = null;
     saveSession(); renderToday();
     return showFeedback(`<span class="l1">cleared ${label(exercise)} s${setNo}</span>\n` +
       `<span class="hint">was ${fmtSet(dropped)}</span>`);
   }
 
+  if (dayIsHistory()) {
+    renderToday();
+    return showFeedback(
+      `<span class="err">? ${state.date} is already logged</span>\n` +
+      `<span class="hint">a logged day is history here. Correct it by saying so, one row ` +
+      `at a time - or remove the session in Trends and log it again.</span>`);
+  }
+  if (state.sets.length && state.sessionDate !== state.date) {
+    renderToday();
+    return showFeedback(
+      `<span class="err">? an unsubmitted session for ${state.sessionDate} is open</span>\n` +
+      `<span class="hint">Submit or Discard it before logging ${state.date}, so sets ` +
+      `cannot land on the wrong date.</span>`);
+  }
   const ex = LIB[exercise];
   if (!ex || !exReady(exercise)) {
     renderToday();
@@ -447,6 +530,7 @@ function commitSlot(exercise, setNo, raw) {
   const row = { exercise, set_no: setNo, weight_kg: weight,
                 reps: prescribe(exercise).target_reps, rir: null };
   if (existing === -1) state.sets.push(row); else state.sets[existing] = row;
+  state.sessionDate = state.date;
   state.sticky = exercise;
   showFeedback(feedback(row));
   renderToday();
@@ -476,7 +560,7 @@ function showPrescription(exercise) {
 
 // ------------------------------------------------------------ TRENDS view
 function volumeCounts(days) {
-  const live = state.sets.map(s => ({ ...s, date: state.date }));
+  const live = state.sets.map(s => ({ ...s, date: state.sessionDate || state.date }));
   const all = [...history(), ...live];
   // Nothing logged anywhere yet is a normal day-one state, not an error: anchor the
   // window on today so the bands render at zero rather than throwing on an undefined end.
@@ -793,11 +877,6 @@ function buildSessionLog() {
     return { date, exercises, setCount, submitted: !seeded.has(date) };
   });
 }
-
-const weekdayOf = (iso) => {
-  const [y, m, d] = iso.split("-").map(Number);
-  return DAYS[(new Date(y, m - 1, d).getDay() + 6) % 7];
-};
 
 function renderSessionLog() {
   const log = buildSessionLog();
@@ -1767,7 +1846,7 @@ const csvRow = (s) =>
 // lost between here and log.csv.
 function showCsv() {
   const out = $("csvout");
-  const live = state.sets.map(s => ({ ...s, date: state.date }));
+  const live = state.sets.map(s => ({ ...s, date: state.sessionDate || state.date }));
   const rows = [...state.committed, ...live].sort((a, b) =>
     a.date.localeCompare(b.date) || a.exercise.localeCompare(b.exercise) || a.set_no - b.set_no);
   if (!rows.length) { out.hidden = true; return showFeedback(`<span class="err">? nothing logged yet</span>`); }
@@ -1793,8 +1872,8 @@ function submitSession() {
   if (!state.sets.length)
     return showFeedback(`<span class="err">? nothing logged - no session to submit</span>`);
 
-  const dated = state.sets.map(s => ({ ...s, date: state.date, notes: "" }));
-  const wasDate = state.date;
+  const wasDate = state.sessionDate || state.date;
+  const dated = state.sets.map(s => ({ ...s, date: wasDate, notes: "" }));
   const sets = dated.length;
   const lifts = new Set(dated.map(s => s.exercise)).size;
 
@@ -1803,11 +1882,13 @@ function submitSession() {
   queueDate(wasDate);
   flushQueue();          // deliberately not awaited: Submit must never wait on a network
   state.sets = [];
+  state.sessionDate = null;
   state.sticky = null;
   $("csvout").hidden = true;
   saveSession();
 
-  setDay(state.dayOffset + 1);
+  // Advance from the day just submitted, wherever the view happened to be.
+  setDay(Math.round((Date.parse(wasDate) - Date.parse(isoDate(new Date()))) / 864e5) + 1);
   saveSession();          // the new (empty) day, so a reload lands in the same place
   renderToday(); renderTrends();
 
@@ -1834,8 +1915,8 @@ function showFeedback(html) { $("feedback").innerHTML = html; }
 
 function saveSession() {
   try { localStorage.setItem(STORE_SESSION, JSON.stringify(
-    { date: state.date, sets: state.sets, sticky: state.sticky,
-      dayOffset: state.dayOffset })); }
+    { date: state.sessionDate, sets: state.sets, sticky: state.sticky,
+      viewDate: state.date, dayOffset: state.dayOffset })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -1843,11 +1924,24 @@ function loadSession() {
     const raw = localStorage.getItem(STORE_SESSION);
     if (!raw) return;
     const d = JSON.parse(raw);
-    // Restore the day being viewed first, then only accept the sets if they belong to
-    // that same date - a session left open overnight must not reappear under today.
-    if (d && Number.isInteger(d.dayOffset) && d.dayOffset > 0) setDay(d.dayOffset);
-    if (d && d.date === state.date && Array.isArray(d.sets)) {
-      state.sets = d.sets; state.sticky = d.sticky || null;
+    if (!d) return;
+    // The sets carry their OWN date, so they survive a reload whatever day was on screen
+    // - but only as that date. A session left open overnight reappears under the day it
+    // was logged on, never silently under today.
+    if (Array.isArray(d.sets) && d.sets.length && d.date) {
+      state.sets = d.sets;
+      state.sessionDate = d.date;
+      state.sticky = d.sticky || null;
+    }
+    // Restore the view. dayOffset is now signed, and is recomputed from the stored view
+    // date so that yesterday stays yesterday across a date rollover rather than becoming
+    // the day before that.
+    const view = d.viewDate || d.date;
+    if (view && /^\d{4}-\d{2}-\d{2}$/.test(view)) {
+      const off = Math.round((Date.parse(view) - Date.parse(isoDate(new Date()))) / 864e5);
+      if (Number.isFinite(off) && Math.abs(off) <= 400) setDay(off);
+    } else if (Number.isInteger(d.dayOffset)) {
+      setDay(d.dayOffset);
     }
   } catch { /* ignore */ }
 }
@@ -1866,6 +1960,7 @@ $("btn-submit").onclick = submitSession;
 $("btn-end").onclick = showCsv;
 $("btn-clear").onclick = () => {
   if (!state.sets.length || confirm("Discard the open session? Nothing has been written to log.csv.")) {
+    state.sessionDate = null;
     state.sets = []; state.sticky = null; $("csvout").hidden = true;
     renderToday(); showFeedback(`<span class="hint">session discarded</span>`);
     saveSession();
