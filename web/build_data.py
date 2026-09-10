@@ -63,6 +63,8 @@ UNCOVERED_JSON = json.dumps(cfg.get("uncovered_by_design", []), separators=COMPA
 ANALYTICS_JSON = json.dumps(analytics, separators=COMPACT)
 LOG_JSON = json.dumps(log, separators=COMPACT)
 
+BUILD = __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M")
+
 out = (f"// GENERATED from exercises.yaml, config.yaml, routine.yaml, {LOG_NAME} and\n"
        "// analyze.py. Do not edit by hand. Regenerate: python3 web/build_data.py\n"
        f"export const EXERCISES = {EX_JSON};\n\n"
@@ -72,7 +74,8 @@ out = (f"// GENERATED from exercises.yaml, config.yaml, routine.yaml, {LOG_NAME}
        f"export const PROGRESSION = {PROG_JSON};\n\n"
        f"export const ROUTINE = {ROUTINE_JSON};\n\n"
        f"export const ANALYTICS = {ANALYTICS_JSON};\n\n"
-       f"export const SEED_LOG = {LOG_JSON};\n")
+       f"export const SEED_LOG = {LOG_JSON};\n\n"
+       f"export const BUILD = {json.dumps(BUILD)};\n")
 open(os.path.join(ROOT, "web", "data.js"), "w").write(out)
 print(f"web/data.js: {len(ex)} exercises, {len(log)} seed sets, "
       f"{len(analytics['sessions'])} sessions of analytics", file=sys.stderr)

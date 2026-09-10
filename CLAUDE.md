@@ -325,6 +325,14 @@ now quads are trained directly.
   running are not in it, so this log cannot see what the legs already carry. That the
   user has since chosen to add a leg day does not license recommending more.
   `calves` is uncovered by design; its report line is UNCOVERED, never RED.
+- **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
+  will pass a module-level syntax error that stops the whole page loading. Use
+  `node --input-type=module --check < web/app.js`, and load the page in a browser and
+  assert `#planweek` has children - a thrown error inside a render leaves the tab blank
+  with nothing in the terminal to show it.
+- **Touch targets in the row controls are 44px tall, and never smaller.** They were 28px,
+  which reads in a test as working and on a phone as broken. A destructive control (the
+  row's `x`) is kept clear of a frequently used one and confirms before acting.
 - `web/data.js` and `web/analytics.json` are generated files. Never hand-edit them -
   run `python3 web/build_data.py` after changing `exercises.yaml`, `config.yaml`,
   `routine.yaml` or `log.csv`.

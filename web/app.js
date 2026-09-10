@@ -14,8 +14,8 @@
 // this session can no longer tell "hit the target" from "missed it," so a deload can
 // never be triggered from a Today-logged set. That trade is deliberate, made once here,
 // not something to silently work around elsewhere.
-import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE, ANALYTICS, SEED_LOG }
-  from "./data.js";
+import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE, ANALYTICS, SEED_LOG,
+         BUILD } from "./data.js";
 
 const MUSCLES = ["chest","lats","upper_back","front_delts","side_delts","rear_delts",
                  "biceps","triceps","quads","hamstrings","glutes","calves","core"];
@@ -1126,8 +1126,14 @@ function renderPlan() {
     (structural ? `<br><span style="color:var(--warn)">${structural} change${
       structural === 1 ? "" : "s"} not exported</span>` : "");
   renderPlanNote(structural);
+  // Shown so a stale page on a phone can be identified rather than argued about.
+  // Optional-by-construction: writing to a missing node here would throw and abandon
+  // the rest of renderPlan, taking #planweek - the actual plan - with it.
+  const buildEl = $("build");
+  if (buildEl) buildEl.textContent = `build ${BUILD}`;
 
-  $("plan-echo").innerHTML = "";
+  const echo = $("plan-echo");
+  if (echo) echo.innerHTML = "";
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
 
@@ -1202,10 +1208,16 @@ function renderPlan() {
     if (def) wireDefPanel(def);
     const setsTo = (n) => {
       const next = clamp(n, 1, 8);
-      if (next === cur()) return;
+      if (next === cur()) {
+        planEcho(
+          `<b>${label(ex)} is at ${cur()} set${cur() === 1 ? "" : "s"}.</b> ` +
+          (cur() >= 8 ? "8 is the most this app will plan for one lift."
+                      : "1 is the fewest - remove the lift instead."));
+        return;
+      }
       setOverride(d, ex, next);
       renderPlan();
-      $("plan-echo").innerHTML =
+      planEcho(
         `<b>${d} ${label(ex)} &rarr; ${next} set${next === 1 ? "" : "s"}.</b> ` +
         (d === todayKey()
           ? (dayIsHistory()
@@ -1213,11 +1225,12 @@ function renderPlan() {
                 `applies the next time this day comes round.`
               : `Showing in Today now.`)
           : `Today is showing <b>${todayKey()}</b>, so this will not change what is on ` +
-            `that tab until ${d} comes round.`);
+            `that tab until ${d} comes round.`));
     };
     row.querySelector('[data-role="inc"]').onclick = () => setsTo(cur() + 1);
     row.querySelector('[data-role="dec"]').onclick = () => setsTo(cur() - 1);
     row.querySelector('[data-role="rm"]').onclick = () => {
+      if (!confirm(`Remove ${label(ex)} from ${d}?`)) return;
       ensureEditable(); state.routine.week[d].plan.splice(at(), 1);
       if (state.setsBy[d]) {           // no entry left for the override to apply to
         delete state.setsBy[d][ex];
@@ -1348,6 +1361,8 @@ function countStructuralEdits() {
   }
   return n;
 }
+
+const planEcho = (html) => { const el = $("plan-echo"); if (el) el.innerHTML = html; };
 
 function renderPlanNote(structural) {
   const el = $("plannote");
