@@ -330,9 +330,17 @@ now quads are trained directly.
   `node --input-type=module --check < web/app.js`, and load the page in a browser and
   assert `#planweek` has children - a thrown error inside a render leaves the tab blank
   with nothing in the terminal to show it.
-- **Touch targets in the row controls are 44px tall, and never smaller.** They were 28px,
-  which reads in a test as working and on a phone as broken. A destructive control (the
-  row's `x`) is kept clear of a frequently used one and confirms before acting.
+- **Set counts are a native `<select>`, not a +/- stepper.** The stepper was reported as
+  unresponsive three times against tests that all passed - first at 28px, then at 44px.
+  A native select is the system picker on a phone: it cannot be missed by a thumb and
+  cannot be confused with the remove control beside it. Prefer a native control over a
+  custom one for anything driven mid-session. Other touch targets in the row are 44px
+  tall and never smaller, and a destructive control (the row's `x`) is kept clear of a
+  frequently used one and confirms before acting.
+- **Test the BUNDLE, not just the split files.** `web/artifact.html` is what the phone
+  loads; `index.html` + `app.js` is only what the dev server serves. Three rounds of
+  "cannot reproduce" were spent testing the wrong one, on a mouse, when the report was
+  about a thumb on the bundle. Use a touch context (`hasTouch: true`) as well.
 - `web/data.js` and `web/analytics.json` are generated files. Never hand-edit them -
   run `python3 web/build_data.py` after changing `exercises.yaml`, `config.yaml`,
   `routine.yaml` or `log.csv`.

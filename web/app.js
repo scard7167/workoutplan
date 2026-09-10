@@ -417,11 +417,10 @@ function renderToday() {
     // inputs however the row wraps, rather than being positioned against them by hand.
     const step = (editable && !p.offplan)
       ? `<div class="slot setstep">
-           <span class="slotn">&nbsp;</span>
-           <span class="stepbtns">
-             <button class="addslot" data-role="less" aria-label="one fewer set of ${label(p.exercise)}">&minus;</button>
-             <button class="addslot" data-role="more" aria-label="one more set of ${label(p.exercise)}">+</button>
-           </span>
+           <span class="slotn">sets</span>
+           <select class="setsel" data-role="sets" aria-label="sets of ${label(p.exercise)}">${
+             [1,2,3,4,5,6,7,8].map(v =>
+               `<option value="${v}"${v === p.sets ? " selected" : ""}>${v}</option>`).join("")}</select>
          </div>`
       : "";
     // "last week" is the honest label for a lift trained once a week, which is most of
@@ -475,18 +474,18 @@ function renderToday() {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
       };
     }
-    const bump = (n) => {
-      const cur = effectivePlan(day).find(x => x.exercise === ex)?.sets ?? 1;
+    const sel = li.querySelector('[data-role="sets"]');
+    if (sel) sel.onchange = (e) => {
       // Never below what is already logged on this day: the plan may shrink, but not so
       // far that it would hide a set that happened.
       const floor = Math.max(1, loggedFor(ex));
-      const next = clamp(cur + n, floor, 8);
-      if (next === cur) return;
+      const next = clamp(+e.target.value, floor, 8);
       setOverride(day, ex, next);
       renderPlan();          // which re-renders Today too, from the same effectivePlan
+      if (next !== +e.target.value)
+        showFeedback(`<span class="hint">${label(ex)} kept at ${next}: ` +
+          `${floor} set${floor === 1 ? "" : "s"} already logged today</span>`);
     };
-    li.querySelector('[data-role="less"]')?.addEventListener("click", () => bump(-1));
-    li.querySelector('[data-role="more"]')?.addEventListener("click", () => bump(1));
 
     for (const input of li.querySelectorAll(".slotw")) {
       // No focus-preview here: the row's "rx" text already shows the prescribed
@@ -1153,9 +1152,10 @@ function renderPlan() {
                title="${label(p.exercise)}" autocomplete="off" autocapitalize="none"
                spellcheck="false" aria-label="exercise name">
         <div class="stepper">
-          <button data-role="dec" aria-label="fewer sets">&minus;</button>
-          <span class="n">${p.sets}</span>
-          <button data-role="inc" aria-label="more sets">+</button>
+          <select data-role="sets" aria-label="sets of ${label(p.exercise)} on ${d}">${
+            [1,2,3,4,5,6,7,8].map(v =>
+              `<option value="${v}"${v === p.sets ? " selected" : ""}>${v} set${
+                v === 1 ? "" : "s"}</option>`).join("")}</select>
         </div>
         <button class="rm" data-role="rm" aria-label="remove">&times;</button>
         ${prov ? `<button class="provtag ${bad ? "bad" : ""}" data-role="deftoggle">${
@@ -1227,8 +1227,7 @@ function renderPlan() {
           : `Today is showing <b>${todayKey()}</b>, so this will not change what is on ` +
             `that tab until ${d} comes round.`));
     };
-    row.querySelector('[data-role="inc"]').onclick = () => setsTo(cur() + 1);
-    row.querySelector('[data-role="dec"]').onclick = () => setsTo(cur() - 1);
+    row.querySelector('[data-role="sets"]').onchange = (e) => setsTo(+e.target.value);
     row.querySelector('[data-role="rm"]').onclick = () => {
       if (!confirm(`Remove ${label(ex)} from ${d}?`)) return;
       ensureEditable(); state.routine.week[d].plan.splice(at(), 1);

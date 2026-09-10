@@ -314,6 +314,16 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
    destructive x sat 9px from +. touch-action: manipulation drops the double-tap-zoom
    wait, so a second tap registers immediately instead of feeling ignored. */
 .stepper { display: flex; align-items: center; gap: 2px; }
+/* A native select, not two small buttons: on a phone this is the system picker, which
+   cannot be missed by a thumb or confused with the remove control beside it. */
+.setsel, .stepper select {
+  height: 44px; min-width: 76px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--panel-2); color: var(--ink); padding: 0 6px;
+  font: 600 15px var(--mono); font-variant-numeric: tabular-nums;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.setsel:focus, .stepper select:focus { border-color: var(--accent); outline: none; }
+.setstep .setsel { min-width: 60px; text-align: center; }
 .stepper button {
   width: 40px; height: 44px; border-radius: 8px; border: 1px solid var(--line-2);
   background: var(--panel-2); color: var(--ink); font: 500 18px/1 var(--sans);
