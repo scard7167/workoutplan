@@ -258,6 +258,10 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   one, and that is exactly how Today and Plan came to disagree about a lift's set count.
   The stepper will not go below what is already logged that day, and is absent on a day
   that is history or for a lift the weekday's plan does not contain.
+  The Plan tab lists all seven days, so it marks the one Today is showing with
+  **ON TODAY** and echoes every set change with the day it landed on - a correct edit to
+  another day otherwise looks like it did nothing, which is exactly how this was
+  reported as broken when it was working.
 - **Order and set counts are owned by the phone.** Both are stored BY EXERCISE NAME per
   day (`strengthlog.order.v1` / `.sets.v1`, synced to `prefs/order` / `prefs/sets`) and
   applied over whatever `routine.yaml` currently says, by `effectivePlan()` - the single

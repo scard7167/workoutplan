@@ -281,6 +281,12 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .dayhead .dn { font: 500 14px/1 var(--sans); flex: 1; }
 .dayhead .ds { font: 400 11px/1 var(--mono); color: var(--muted); }
 .dayhead.today { box-shadow: inset 2px 0 0 var(--accent); }
+.dayhead .onnow {
+  font: 500 9px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid var(--accent-d); border-radius: 3px; padding: 3px 5px;
+}
+#plan-echo { margin: 0 0 12px; }
+#plan-echo:empty { display: none; }
 .dayrow {
   display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center;
   padding: 9px 14px; border-top: 1px solid var(--line); background: var(--panel);

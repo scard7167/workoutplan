@@ -1127,6 +1127,7 @@ function renderPlan() {
       structural === 1 ? "" : "s"} not exported</span>` : "");
   renderPlanNote(structural);
 
+  $("plan-echo").innerHTML = "";
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
 
@@ -1156,9 +1157,12 @@ function renderPlan() {
         ${prov ? defPanel(p.exercise, bad) : ""}
       </div>`;
     }).join("");
+    const isViewed = d === todayKey();
     return `<div class="day">
-      <div class="dayhead ${d === todayKey() ? "today" : ""}">
+      <div class="dayhead ${isViewed ? "today" : ""}">
         <span class="dd">${d}</span><span class="dn">${day.name}</span>
+        ${isViewed ? `<span class="onnow">${dayIsHistory()
+            ? "on Today &middot; logged" : "on Today"}</span>` : ""}
         <span class="ds">${n} sets</span></div>
       ${rows}
       <div class="addrow"><button data-role="add" data-day="${d}">+ add a lift</button></div>
@@ -1196,12 +1200,23 @@ function renderPlan() {
     };
     const def = row.querySelector('[data-role="def"]');
     if (def) wireDefPanel(def);
-    row.querySelector('[data-role="inc"]').onclick = () => {
-      setOverride(d, ex, clamp(cur() + 1, 1, 8)); renderPlan();
+    const setsTo = (n) => {
+      const next = clamp(n, 1, 8);
+      if (next === cur()) return;
+      setOverride(d, ex, next);
+      renderPlan();
+      $("plan-echo").innerHTML =
+        `<b>${d} ${label(ex)} &rarr; ${next} set${next === 1 ? "" : "s"}.</b> ` +
+        (d === todayKey()
+          ? (dayIsHistory()
+              ? `Today is showing ${state.date}, which is already logged - the new count ` +
+                `applies the next time this day comes round.`
+              : `Showing in Today now.`)
+          : `Today is showing <b>${todayKey()}</b>, so this will not change what is on ` +
+            `that tab until ${d} comes round.`);
     };
-    row.querySelector('[data-role="dec"]').onclick = () => {
-      setOverride(d, ex, clamp(cur() - 1, 1, 8)); renderPlan();
-    };
+    row.querySelector('[data-role="inc"]').onclick = () => setsTo(cur() + 1);
+    row.querySelector('[data-role="dec"]').onclick = () => setsTo(cur() - 1);
     row.querySelector('[data-role="rm"]').onclick = () => {
       ensureEditable(); state.routine.week[d].plan.splice(at(), 1);
       if (state.setsBy[d]) {           // no entry left for the override to apply to
