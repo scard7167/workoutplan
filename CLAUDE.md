@@ -4,10 +4,13 @@ Personal strength-training log, plan and analytics. Logged SET BY SET on a phone
 mid-session, inside Claude Code. Every interaction is optimised for that: terse input,
 one-line output.
 
-Training context: 7 short strength sessions/week, full gym, hypertrophy + robustness,
+Training context: 7 strength sessions/week, full gym, hypertrophy + robustness,
 alongside 30-50 km/week cycling and running that this log never sees. Recovery is the
-binding constraint, not gym time - sessions were sized at 10-12 working sets, though the
-gym80 days now run 16-18. The cycling already loads the legs, so `calves` is uncovered by
+binding constraint, not gym time - sessions were sized at 10-12 working sets, but on
+**2026-09-10 every lift was set to 4 sets at the user's request**: the week is now 140
+working sets across days of 16-28, and every band was rederived to match. That is ~50%
+above the design this log was written around. It is a deliberate choice, not drift, and
+the first number to revisit if recovery goes. The cycling already loads the legs, so `calves` is uncovered by
 design (see `uncovered_by_design` in config.yaml) and is never a reason to add calf work
 here. **Quads were uncovered too until 2026-09-09**, when a direct leg day was added to
 Wednesday at the user's request - they are now trained and measured like anything else.

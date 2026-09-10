@@ -1064,6 +1064,22 @@ function loadOrder() {
         state.orderAt = t.updated_at;
     }
   } catch { /* ignore */ }
+  pruneOverrides();
+}
+
+// An override equal to the file's value is not an override. setOverride() refuses to
+// store one; this applies the same rule to what is ALREADY stored, so a routine change
+// cannot leave redundant entries behind that count as drift and shadow the file.
+function pruneOverrides() {
+  let changed = false;
+  for (const day of Object.keys(state.setsBy)) {
+    const file = new Map((ROUTINE.week[day]?.plan || []).map(p => [p.exercise, p.sets]));
+    for (const ex of Object.keys(state.setsBy[day])) {
+      if (file.get(ex) === state.setsBy[day][ex]) { delete state.setsBy[day][ex]; changed = true; }
+    }
+    if (!Object.keys(state.setsBy[day]).length) { delete state.setsBy[day]; changed = true; }
+  }
+  if (changed) savePrefs();
 }
 
 function saveRoutine() {
@@ -1529,6 +1545,7 @@ async function pullRemote() {
         localStorage.setItem(STORE_SETS,
           JSON.stringify({ days: state.setsBy, updated_at: state.orderAt }));
       } catch { /* private mode */ }
+      pruneOverrides();   // the store may hold overrides a newer routine.yaml made moot
     }
   } catch { /* prefs are a convenience - never fail a sync over them */ }
 }

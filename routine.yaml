@@ -5,8 +5,12 @@
 #
 # Design constraints:
 #   - 7 sessions/week alongside 30-50 km of running and cycling. Recovery, not time,
-#     is the binding constraint, so sessions are SHORT (10-12 working sets, ~35 min)
-#     and each lift is trained 2-3x/week rather than hammered once.
+#     was the binding constraint, so sessions were SHORT (10-12 working sets, ~35 min).
+#     ON 2026-09-10, AT THE USER'S REQUEST, EVERY LIFT WAS SET TO 4 SETS: the week is now
+#     140 working sets, days run 16-28, and the bands in config.yaml were rederived to
+#     match (chest 20/wk, triceps 20, biceps 16, glutes 16). That is roughly 50% more
+#     than the design this file was written around, and it is a deliberate choice, not
+#     drift - but it is the number to revisit first if recovery goes.
 #     MONDAY IS THE EXCEPTION at 16 sets: it carries three separate gym80 chest presses
 #     (3023N incline, 3121 standing, 3016 seated). Three presses in one plane is a lot
 #     of the same pattern, and it is what pushed the chest band from 12 to 15 sets/week.
@@ -54,12 +58,12 @@ week:
   mon:
     name: chest + triceps (gym80)
     plan:
-      - {exercise: incline_chest_press_machine, sets: 3}
-      - {exercise: standing_chest_press_machine, sets: 3}
-      - {exercise: seated_chest_press_machine, sets: 3}
-      - {exercise: lateral_raise_machine, sets: 3}
-      - {exercise: dip_machine, sets: 2}
-      - {exercise: overhead_triceps_machine, sets: 2}
+      - {exercise: incline_chest_press_machine, sets: 4}
+      - {exercise: standing_chest_press_machine, sets: 4}
+      - {exercise: seated_chest_press_machine, sets: 4}
+      - {exercise: lateral_raise_machine, sets: 4}
+      - {exercise: dip_machine, sets: 4}
+      - {exercise: overhead_triceps_machine, sets: 4}
   tue:
     # Rebuilt on the gym80 machines, the same way mon was. Where a machine is a direct
     # substitute it REPLACES the free-weight lift rather than joining it - pullup ->
@@ -72,13 +76,13 @@ week:
     # machines at different arm angles, 4 biceps sets on the day.
     name: pull + overhead (gym80)
     plan:
-      - {exercise: lat_pulldown_machine, sets: 3}
-      - {exercise: shoulder_press_machine, sets: 3}
-      - {exercise: standing_lateral_raise_machine, sets: 3}
-      - {exercise: face_pull, sets: 3}
-      - {exercise: biceps_machine, sets: 2}
-      - {exercise: horizontal_biceps_machine, sets: 2}
-      - {exercise: triceps_machine, sets: 2}
+      - {exercise: lat_pulldown_machine, sets: 4}
+      - {exercise: shoulder_press_machine, sets: 4}
+      - {exercise: standing_lateral_raise_machine, sets: 4}
+      - {exercise: face_pull, sets: 4}
+      - {exercise: biceps_machine, sets: 4}
+      - {exercise: horizontal_biceps_machine, sets: 4}
+      - {exercise: triceps_machine, sets: 4}
   wed:
     # Was "hinge + core" (RDL, hanging leg raise, lateral raise, chest supported row).
     # Rebuilt as a LEG day on the gym80 machines. This is a deliberate reversal of a
@@ -90,37 +94,37 @@ week:
     # days, so no muscle lost its only lift; hanging_leg_raise stays as the core slot.
     name: legs (gym80)
     plan:
-      - {exercise: leg_press_machine, sets: 3}
-      - {exercise: leg_extension_machine, sets: 3}
-      - {exercise: seated_leg_curl_machine, sets: 3}
-      - {exercise: hip_thrust_machine, sets: 2}
-      - {exercise: hip_abduction_machine, sets: 2}
-      - {exercise: hanging_leg_raise, sets: 3}
+      - {exercise: leg_press_machine, sets: 4}
+      - {exercise: leg_extension_machine, sets: 4}
+      - {exercise: seated_leg_curl_machine, sets: 4}
+      - {exercise: hip_thrust_machine, sets: 4}
+      - {exercise: hip_abduction_machine, sets: 4}
+      - {exercise: hanging_leg_raise, sets: 4}
   thu:
     name: heavy pair
     plan:
-      - {exercise: bench_press, sets: 3}
-      - {exercise: pullup, sets: 3}
-      - {exercise: triceps_pushdown, sets: 2}
-      - {exercise: barbell_curl, sets: 2}
+      - {exercise: bench_press, sets: 4}
+      - {exercise: pullup, sets: 4}
+      - {exercise: triceps_pushdown, sets: 4}
+      - {exercise: barbell_curl, sets: 4}
   fri:
     name: shoulders
     plan:
-      - {exercise: overhead_press, sets: 3}
-      - {exercise: lateral_raise, sets: 3}
-      - {exercise: face_pull, sets: 3}
-      - {exercise: hanging_leg_raise, sets: 2}
+      - {exercise: overhead_press, sets: 4}
+      - {exercise: lateral_raise, sets: 4}
+      - {exercise: face_pull, sets: 4}
+      - {exercise: hanging_leg_raise, sets: 4}
   sat:
     name: row + hinge
     plan:
-      - {exercise: chest_supported_row, sets: 3}
-      - {exercise: romanian_deadlift, sets: 3}
-      - {exercise: barbell_curl, sets: 2}
-      - {exercise: triceps_pushdown, sets: 2}
+      - {exercise: chest_supported_row, sets: 4}
+      - {exercise: romanian_deadlift, sets: 4}
+      - {exercise: barbell_curl, sets: 4}
+      - {exercise: triceps_pushdown, sets: 4}
   sun:
     name: full
     plan:
-      - {exercise: bench_press, sets: 3}
-      - {exercise: pullup, sets: 3}
-      - {exercise: lateral_raise, sets: 3}
-      - {exercise: face_pull, sets: 2}
+      - {exercise: bench_press, sets: 4}
+      - {exercise: pullup, sets: 4}
+      - {exercise: lateral_raise, sets: 4}
+      - {exercise: face_pull, sets: 4}

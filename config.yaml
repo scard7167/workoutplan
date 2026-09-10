@@ -20,19 +20,19 @@ athlete:
 # volume report labels them UNCOVERED rather than RED. Do not "fix" this by adding leg
 # work on the basis of this log.
 volume_targets:
-  chest:        {min: 13, target: 15, max: 19}
-  lats:         {min: 8,  target: 12, max: 16}
-  upper_back:   {min: 1,  target: 3,  max: 6}
-  front_delts:  {min: 4,  target: 6,  max: 8}
-  side_delts:   {min: 10, target: 12, max: 16}
-  rear_delts:   {min: 6,  target: 8,  max: 11}
-  biceps:       {min: 7,  target: 8,  max: 11}
-  triceps:      {min: 9,  target: 10, max: 13}
-  quads:        {min: 4,  target: 6,  max: 10}
-  hamstrings:   {min: 4,  target: 6,  max: 8}
-  glutes:       {min: 8,  target: 10, max: 12}
+  chest:        {min: 18, target: 20, max: 24}
+  lats:         {min: 12, target: 16, max: 20}
+  upper_back:   {min: 2, target: 4, max: 7}
+  front_delts:  {min: 6, target: 8, max: 10}
+  side_delts:   {min: 14, target: 16, max: 20}
+  rear_delts:   {min: 10, target: 12, max: 15}
+  biceps:       {min: 15, target: 16, max: 19}
+  triceps:      {min: 19, target: 20, max: 23}
+  quads:        {min: 6, target: 8, max: 12}
+  hamstrings:   {min: 6, target: 8, max: 10}
+  glutes:       {min: 14, target: 16, max: 18}
   calves:       {min: 0,  target: 0,  max: 5}
-  core:         {min: 4,  target: 5,  max: 8}
+  core:         {min: 7, target: 8, max: 11}
 
 # Muscles no routine lift trains directly. Reported as UNCOVERED, never as a deficit.
 # quads came OUT on 2026-09-09: the Wednesday gym80 leg day trains them directly, so
