@@ -134,6 +134,9 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
   background: none; color: var(--muted); font: 400 17px/1 var(--sans); cursor: pointer; flex: none;
 }
 .addslot:hover { color: var(--ink-2); border-color: var(--line-2); }
+/* Sits at the end of the slot row and changes the PLAN's set count for this lift. */
+.setstep .stepbtns { display: flex; gap: 4px; }
+.setstep .addslot { width: 28px; height: 40px; font-size: 15px; }
 
 /* -------------------------------------------------------------- feedback */
 .feedback {

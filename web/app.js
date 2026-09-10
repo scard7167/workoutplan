@@ -332,7 +332,8 @@ function viewPlan() {
   const have = new Set(base.map(p => p.exercise));
   const extra = [...new Set(logged.map(r => r.exercise))]
     .filter(e => !have.has(e)).sort()
-    .map(e => ({ exercise: e, sets: logged.filter(r => r.exercise === e).length }));
+    .map(e => ({ exercise: e, sets: logged.filter(r => r.exercise === e).length,
+                 offplan: true }));
   return [...base, ...extra];
 }
 
@@ -408,6 +409,21 @@ function renderToday() {
         <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
       </div>`;
     }).join("");
+    // Changing the count here changes the PLAN, through the very same setOverride() the
+    // Plan tab's stepper calls - so it shows up there, syncs, and survives a publish.
+    // An earlier version of this control kept a session-local count instead, which is
+    // exactly how Today and Plan came to disagree about how many sets a lift had.
+    // Built as a .slot so it shares the boxes' three-row column and lines up with the
+    // inputs however the row wraps, rather than being positioned against them by hand.
+    const step = (editable && !p.offplan)
+      ? `<div class="slot setstep">
+           <span class="slotn">&nbsp;</span>
+           <span class="stepbtns">
+             <button class="addslot" data-role="less" aria-label="one fewer set of ${label(p.exercise)}">&minus;</button>
+             <button class="addslot" data-role="more" aria-label="one more set of ${label(p.exercise)}">+</button>
+           </span>
+         </div>`
+      : "";
     // "last week" is the honest label for a lift trained once a week, which is most of
     // them on a 7-day rotation - but a lift scheduled twice a week was last done 3 or 4
     // days ago, and calling that "last week" would be wrong. Say the actual gap instead.
@@ -435,7 +451,7 @@ function renderToday() {
             ? "no increment or rep range yet &middot; set it in Plan"
             : `${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}` +
               ` &middot; ${rx.target_reps} reps`}</span>
-      <div class="slots">${legend}${slots}</div></li>`;
+      <div class="slots">${legend}${slots}${step}</div></li>`;
   }).join("");
 
   // Submit and Discard act on the OPEN session. On a day that is already history there
@@ -459,6 +475,19 @@ function renderToday() {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
       };
     }
+    const bump = (n) => {
+      const cur = effectivePlan(day).find(x => x.exercise === ex)?.sets ?? 1;
+      // Never below what is already logged on this day: the plan may shrink, but not so
+      // far that it would hide a set that happened.
+      const floor = Math.max(1, loggedFor(ex));
+      const next = clamp(cur + n, floor, 8);
+      if (next === cur) return;
+      setOverride(day, ex, next);
+      renderPlan();          // which re-renders Today too, from the same effectivePlan
+    };
+    li.querySelector('[data-role="less"]')?.addEventListener("click", () => bump(-1));
+    li.querySelector('[data-role="more"]')?.addEventListener("click", () => bump(1));
+
     for (const input of li.querySelectorAll(".slotw")) {
       // No focus-preview here: the row's "rx" text already shows the prescribed
       // weight/reps at a glance, and firing showPrescription() on focus would

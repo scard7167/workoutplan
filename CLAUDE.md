@@ -251,6 +251,13 @@ Two kinds of edit, and conflating them loses work:
 **Persisting and exporting are different things.** Order and set counts both PERSIST
 without any repo round-trip; only some edits additionally need to be EXPORTED.
 
+- **Set counts are changed from EITHER tab.** Today's rows carry a stepper at the end of
+  the slot row, and it calls the same `setOverride()` the Plan tab's does - one
+  mechanism, so a change made mid-session shows up in Plan, syncs, and survives a
+  publish. It is never a session-local count: an earlier version of that control kept
+  one, and that is exactly how Today and Plan came to disagree about a lift's set count.
+  The stepper will not go below what is already logged that day, and is absent on a day
+  that is history or for a lift the weekday's plan does not contain.
 - **Order and set counts are owned by the phone.** Both are stored BY EXERCISE NAME per
   day (`strengthlog.order.v1` / `.sets.v1`, synced to `prefs/order` / `prefs/sets`) and
   applied over whatever `routine.yaml` currently says, by `effectivePlan()` - the single
