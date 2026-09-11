@@ -359,11 +359,15 @@ function renderToday() {
       ` <span class="ahead">${off > 0 ? `+${off}d ahead` : `${-off}d back`}</span> ` +
       `<button class="backtoday" id="btn-backtoday">today</button>`) +
     (history_ ? ` <span class="ahead">logged</span>` : "");
-  const step = (n) => { setDay(state.dayOffset + n); saveSession(); renderToday(); };
+  // renderAll, not renderToday: paging changes todayKey(), and the Plan tab marks that
+  // weekday with ON TODAY and words its echoes against it. Refreshing only Today is what
+  // left Plan claiming a different day was current - and, once the order came from the
+  // store rather than the file, showing a different order too.
+  const step = (n) => { setDay(state.dayOffset + n); saveSession(); renderAll(); };
   $("btn-prevday").onclick = () => step(-1);
   $("btn-nextday").onclick = () => step(1);
   if (off !== 0)
-    $("btn-backtoday").onclick = () => { setDay(0); saveSession(); renderToday(); };
+    $("btn-backtoday").onclick = () => { setDay(0); saveSession(); renderAll(); };
   $("today-name").textContent = entry.name;
 
   const planned = plan.reduce((a, p) => a + p.sets, 0);
@@ -484,7 +488,7 @@ function renderToday() {
       const next = clamp(cur + n, floor, 8);
       if (next === cur) return;
       setOverride(day, ex, next);
-      renderPlan();          // which re-renders Today too, from the same effectivePlan
+      renderAll();          // Today and Plan share one set count - refresh both
     };
     li.querySelector('[data-role="less"]')?.addEventListener("click", () => bump(-1));
     li.querySelector('[data-role="more"]')?.addEventListener("click", () => bump(1));
@@ -1123,12 +1127,16 @@ function defPanel(key, open) {
   </div>`;
 }
 
+// Today, Trends and the Plan tab all read the SAME state - effectivePlan(), the set
+// overrides, the order - so any of them rendered at a different moment from the others is
+// showing a stale snapshot of it, and the two tabs then disagree about a plan that has
+// only one value. That is not hypothetical: it is how Today and Plan came to disagree
+// about a set count once already, and how they came to disagree about the exercise order
+// after that. So there is one entry point, every mutation goes through it, and no
+// renderer calls another.
+function renderAll() { renderToday(); renderTrends(); renderPlan(); }
+
 function renderPlan() {
-  // Today's rows (prescribed loads, set counts) are derived from this same routine
-  // state - every routine edit has to refresh both, or Today goes stale the moment
-  // you swap a lift, change its sets, or reorder, without needing a tab switch to
-  // paper over it.
-  renderToday();
   const r = routine();
   const planned = DAYS.reduce((a, d) => a + effectivePlan(d).reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
@@ -1208,7 +1216,7 @@ function renderPlan() {
     row.querySelector('[data-role="ex"]').onchange = (e) => {
       const typed = e.target.value;
       const was = ex;
-      if (!typed.trim()) { renderPlan(); return; }          // blank is not an edit
+      if (!typed.trim()) { renderAll(); return; }          // blank is not an edit
       let key = resolveExercise(typed);
       let minted = false;
       if (!key) {
@@ -1217,9 +1225,9 @@ function renderPlan() {
         key = createProvisional(typed, { source: "typed" });
         minted = true;
       }
-      if (!key || key === was) { renderPlan(); return; }
+      if (!key || key === was) { renderAll(); return; }
       ensureEditable(); state.routine.week[d].plan[at()].exercise = key;
-      saveRoutine(); renderPlan();
+      saveRoutine(); renderAll();
       if (minted) showFeedback(
         `<span class="l1">${label(key)} added to ${d}</span>\n` +
         `<span class="l2">not in exercises.yaml - no rule for it yet</span>\n` +
@@ -1242,7 +1250,7 @@ function renderPlan() {
         return;
       }
       setOverride(d, ex, next);
-      renderPlan();
+      renderAll();
       planEcho(
         `<b>${d} ${label(ex)} &rarr; ${next} set${next === 1 ? "" : "s"}.</b> ` +
         (d === todayKey()
@@ -1263,7 +1271,7 @@ function renderPlan() {
         if (!Object.keys(state.setsBy[d]).length) delete state.setsBy[d];
         savePrefs();
       }
-      saveRoutine(); renderPlan();
+      saveRoutine(); renderAll();
     };
     const handle = row.querySelector('[data-role="handle"]');
     handle.addEventListener("pointerdown", (e) => startDrag(e, row, d));
@@ -1281,12 +1289,12 @@ function renderPlan() {
       ensureEditable();
       state.routine.week[btn.dataset.day].plan.push({ exercise: r.lifts[0], sets: 2 });
       // the new row's combobox is where you type what it actually is
-      saveRoutine(); renderPlan();
+      saveRoutine(); renderAll();
     };
   }
 }
 
-// This panel edits IN PLACE and never calls renderPlan(). Re-rendering the plan on a
+// This panel edits IN PLACE and never calls renderAll(). Re-rendering the plan on a
 // field change replaces the very input being typed into: on a phone that eats the
 // keystroke, the focus and the caret. So each edit writes state, saves, and touches
 // only the two things that can visibly change - the row's own flag, and Today.
@@ -1345,15 +1353,15 @@ let gestureAt = 0;            // when the pointer path last handled a handle ges
 // are not looking at" are indistinguishable on screen otherwise.
 function commitOrder(day, fromIndex, toIndex) {
   const names = effectivePlan(day).map(p => p.exercise);
-  if (fromIndex < 0 || fromIndex >= names.length) { renderPlan(); return false; }
+  if (fromIndex < 0 || fromIndex >= names.length) { renderAll(); return false; }
   const to = clamp(toIndex, 0, names.length - 1);
-  if (to === fromIndex) { renderPlan(); return false; }
+  if (to === fromIndex) { renderAll(); return false; }
   const [moved] = names.splice(fromIndex, 1);
   names.splice(to, 0, moved);
   state.order[day] = names;
   state.pick = null;
   saveOrder();
-  renderPlan();
+  renderAll();
   planEcho(
     `<b>${day} ${label(moved)} &rarr; #${to + 1} of ${names.length}.</b> ` +
     (day === todayKey()
@@ -1371,18 +1379,18 @@ function commitOrder(day, fromIndex, toIndex) {
 function pickToggle(day, ex) {
   const cur = state.pick;
   if (cur && cur.day === day && cur.ex === ex) {
-    state.pick = null; renderPlan(); return;
+    state.pick = null; renderAll(); return;
   }
   if (cur && cur.day === day) {                 // second tap in the same day: the drop
     const names = effectivePlan(day).map(p => p.exercise);
     const from = names.indexOf(cur.ex), to = names.indexOf(ex);
     state.pick = null;
-    if (from < 0 || to < 0) { renderPlan(); return; }
+    if (from < 0 || to < 0) { renderAll(); return; }
     commitOrder(day, from, to);
     return;
   }
   state.pick = { day, ex };                     // a pick in another day replaces it
-  renderPlan();
+  renderAll();
   planEcho(`<b>${label(ex)} picked up (${day}).</b> Tap another row's handle to drop it ` +
            `there, or tap this row's handle again to cancel.`);
 }
@@ -1440,7 +1448,7 @@ function startDrag(e, row, day) {
     // snap-back itself. A gesture that never passed the slop is a tap: hand it to
     // pickToggle rather than swallowing it.
     if (dragging) {
-      if (current !== fromIndex) commitOrder(day, fromIndex, current); else renderPlan();
+      if (current !== fromIndex) commitOrder(day, fromIndex, current); else renderAll();
     } else {
       pickToggle(day, row.dataset.ex);
     }
@@ -1609,6 +1617,7 @@ function sessionDoc(date) {
 }
 
 async function pullRemote() {
+  let changed = false;
   if (!DB) return;
   const since = isoDate(new Date(Date.now() - SYNC_WINDOW * 864e5));
   try {
@@ -1622,6 +1631,7 @@ async function pullRemote() {
         rows.push({ ...s, date: body.date || d.id, rir: s.rir ?? null, notes: "" });
     }
     state.remote = rows;
+    changed = true;
   } catch (e) {
     setSync("error", dbErr(e));
   }
@@ -1643,8 +1653,25 @@ async function pullRemote() {
           JSON.stringify({ days: state.setsBy, updated_at: state.orderAt }));
       } catch { /* private mode */ }
       pruneOverrides();   // the store may hold overrides a newer routine.yaml made moot
+      changed = true;
     }
   } catch { /* prefs are a convenience - never fail a sync over them */ }
+  // THE fix for Today and Plan disagreeing about the exercise order. This is the one
+  // place remote state lands, it can replace the order and the set counts wholesale
+  // (another device wrote them later), and it used to render nothing - so both tabs kept
+  // whatever they last drew, and the next thing to refresh one of them on its own (paging
+  // Today by a day) left the other showing an order that no longer existed.
+  if (changed) renderRemote();
+}
+
+// Re-render on remote state arriving, except into a Plan field being typed in: a rebuild
+// there would take the half-typed exercise name with it. The tab renders on entry anyway,
+// so nothing stays stale for longer than it takes to look away.
+function renderRemote() {
+  if (!booted) return;
+  const el = document.activeElement;
+  if (el && el.closest && el.closest("#planweek")) return;
+  renderAll();
 }
 
 // One date at a time, stopping at the first failure so the queue keeps its order and
@@ -1733,9 +1760,9 @@ async function openStore() {
   setSync("idle");
   await pullRemote();
   await flushQueue();
-  // renderPlan too: a pull can bring back an exercise order this device did not have
-  // (a fresh browser, or a cleared cache), and the Plan tab is rendered once at boot.
-  renderToday(); renderTrends(); renderPlan();
+  // All three: a pull can bring back an exercise order or a set count this device did
+  // not have (a fresh browser, or a cleared cache), and every tab reads those.
+  renderAll();
 }
 
 // ------------------------------------------------------------ photo dump
@@ -1885,7 +1912,7 @@ function acceptProposal(pr) {
   saveRoutine();
   state.proposals = state.proposals.filter(x => x !== pr);
   if (photo) state.photos = state.photos.filter(p => p.id !== photo.id);
-  renderPlan();
+  renderAll();
   renderScan();
 }
 
@@ -2063,7 +2090,7 @@ function submitSession() {
   // Advance from the day just submitted, wherever the view happened to be.
   setDay(Math.round((Date.parse(wasDate) - Date.parse(isoDate(new Date()))) / 864e5) + 1);
   saveSession();          // the new (empty) day, so a reload lands in the same place
-  renderToday(); renderTrends();
+  renderAll();
 
   showFeedback(
     `<span class="l1">submitted ${wasDate}: ${sets} sets, ${lifts} lifts</span>\n` +
@@ -2127,8 +2154,15 @@ function selectTab(name) {
   }
   // A row left picked up on a tab you walked away from is a held gesture with its
   // instruction scrolled out of sight. Drop it.
-  if (state.pick) { state.pick = null; renderPlan(); }
+  if (state.pick) state.pick = null;
+  // The belt to renderAll's braces: whatever you switch to is computed now, from current
+  // state, so no tab can be showing a render from before the last change however it got
+  // there. Cheap - a tab switch already costs a repaint, and it loses no focus.
+  if (booted) ({ today: renderToday, trends: renderTrends, plan: renderPlan }[name])();
 }
+// Nothing renders until the first renderAll(): selectTab runs once during start-up,
+// before the data the renderers read has finished loading.
+let booted = false;
 for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
 
 $("btn-more").onclick = () => { state.logLimit += 20; renderSessionLog(); };
@@ -2160,7 +2194,7 @@ $("btn-reset").onclick = () => {
     savePrefs();
     try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
     $("yamlout").hidden = true;
-    renderPlan();
+    renderAll();
   }
 };
 
@@ -2172,9 +2206,8 @@ loadQueue();
 loadOrder();
 loadSession();
 selectTab("today");
-renderToday();
-renderTrends();
-renderPlan();
+renderAll();
+booted = true;
 renderScan();
 openStore();                                   // async; the page is already usable
 addEventListener("online", () => flushQueue());

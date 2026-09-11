@@ -286,6 +286,18 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   and whether Today is showing that day - "it did nothing" and "it changed a day you are
   not looking at" look identical otherwise, and that ambiguity is what got this reported
   twice.
+- **One render entry point: `renderAll()`.** Today, Trends and the Plan tab read the same
+  state - `effectivePlan()`, the set overrides, the order - so a tab rendered at a
+  different moment from the others is showing a stale snapshot of a plan that has only one
+  value, and the two tabs then disagree. No renderer calls another; every mutation calls
+  `renderAll()`; `selectTab()` re-renders whatever you switch to; and `pullRemote()` - the
+  one place remote state lands, and the one that can replace the order and the set counts
+  wholesale because another device wrote them later - renders when it changes anything,
+  which it used not to do at all. That last hole is how Plan and Today came to show
+  different exercise orders: a failed boot pull left Plan drawn from the cached order, a
+  later flush quietly swapped in the store's, and paging Today by a day refreshed only
+  Today. `renderRemote()` skips the re-render while a Plan field has focus, so a
+  half-typed exercise name is never swept away by a sync.
 - **A set count still has to be EXPORTED**, because it changes a muscle's weekly volume
   and `config.yaml`'s bands are DERIVED from that: until it reaches `routine.yaml` the
   bands are measuring a plan that is not the one on screen. The Plan tab counts the
