@@ -1730,7 +1730,12 @@ function renderSyncState() {
     : state.sync === "error" ? ` · sync ${state.syncCode || "failed"}`
     : n                      ? ` · ${n} to sync`
     : " · synced";
-  $("hstate").textContent = `${state.date} · ${state.sets.length} sets${txt}`;
+  // The build is in the header, not only at the foot of the Plan tab. A stale page on a
+  // phone is indistinguishable from a bug that was never fixed, and both times that has
+  // come up the first question was "which version is that?" - it should be answerable
+  // from any screenshot without scrolling anywhere.
+  $("hstate").textContent =
+    `${state.date} · ${state.sets.length} sets${txt} · ${BUILD.slice(5)}`;
   const el = $("syncnote");
   if (!el) return;
   el.hidden = state.sync === "off" && !n;
