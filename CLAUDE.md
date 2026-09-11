@@ -343,6 +343,25 @@ The Plan tab carries one chip per plan; the selected one drives Today, the Plan 
 the bands. The choice is a synced pref (`prefs/order.plan`), so it follows you across
 devices like the order does.
 
+- **Prefs merge PER PLAN AND PER DAY, never per document.** `prefs/order` and
+  `prefs/sets` carry an `at` map of `"<plan>/<day>" -> ISO stamp` beside the data, and
+  `mergePrefsMap()` takes a remote day only when its stamp beats this device's. A whole-
+  document `updated_at` meant last writer wins the entire week, so a second view of the
+  page that had never seen your reorder republished its stale copy over it - which is
+  what both "the order does not flow through" and "the set buttons do nothing" were.
+  Rules that fall out of it and must hold:
+  - only an edit the user actually made stamps a day. `savePrefs(days)` stamps and
+    pushes; `persistPrefs()` writes this browser only. Anything DERIVED - `pruneOverrides`,
+    absorbing another tab's write - uses `persistPrefs`, because pushing there would let
+    a freshly opened tab out-stamp a real edit.
+  - `flushQueue` READS, merges, then writes. A blind publish of one page's memory is the
+    bug itself.
+  - the stamp map is the authority, not the day map: a key with a stamp and no entry is a
+    deliberate clearing; a key with no stamp is a day that document knows nothing about
+    and must be left alone, not deleted.
+  - `renderRemote()` defers only while a drag or a held row is in flight, or while a Plan
+    field is being TYPED into - and comes back on blur. Skipping a render and never
+    returning to it is its own version of the two tabs disagreeing.
 - **Order and set counts are per PLAN as well as per day** - `strengthlog.order.v1` and
   `.sets.v1` are now `{planId: {day: ...}}`. They are overrides on a specific week of
   lifts, so letting one plan's counts apply to another would quietly rewrite a block you

@@ -54,6 +54,13 @@ const state = {
   plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
   planName: {},          // renames and new plans this device made, id -> name
   routineBy: {},         // structural edits, per plan
+  // Stamped PER DAY, not per document. A whole-map timestamp means the last writer wins
+  // the whole week, so a second view of this page that had never seen your reorder was
+  // overwriting it with its own stale copy - which is what "the order does not flow
+  // through" and "the set buttons do nothing" both were. Keyed "<plan>/<day>", because
+  // with plans the same weekday exists once per plan and they are edited independently.
+  orderAtBy: {},         // plan/day -> when this device last changed that day's order
+  setsAtBy: {},          // plan/day -> when this device last changed that day's set counts
   dropped: 0,        // set-count edits discarded because a newer plan shipped
   queue: [],         // dates written here but not yet in the store
   sync: "off",       // off | idle | pending | error
@@ -1087,7 +1094,7 @@ function setOverride(dayKey, exercise, n) {
   const day = all[dayKey] || (all[dayKey] = {});
   if (n === fileSets) delete day[exercise]; else day[exercise] = n;
   if (!Object.keys(day).length) delete all[dayKey];
-  savePrefs();
+  savePrefs([dayKey]);
 }
 
 function orderedPlan(dayKey, plan, pid = state.plan) {
@@ -1101,16 +1108,105 @@ function orderedPlan(dayKey, plan, pid = state.plan) {
     (rank.has(b.exercise) ? rank.get(b.exercise) : want.length + plan.indexOf(b)));
 }
 
-function savePrefs() {
-  state.orderAt = new Date().toISOString();
-  state.orderDirty = true;
+// A stamp addresses one plan's one day. Two plans have a mon each and they are edited
+// independently, so a stamp keyed by weekday alone would let an edit to one block
+// out-rank an edit to the other.
+const stampKey = (pid, day) => `${pid}/${day}`;
+const splitKey = (k) => {
+  const i = k.indexOf("/");
+  return i < 0 ? [ACTIVE_PLAN, k] : [k.slice(0, i), k.slice(i + 1)];
+};
+const atPath = (map, pid, day) => (map[pid] || {})[day];
+
+// The document stamp is the newest thing in it, so another device can still tell a whole
+// document apart; the per-day stamps are what actually decide a merge.
+function prefsStamp() {
+  const all = [...Object.values(state.orderAtBy), ...Object.values(state.setsAtBy)]
+    .filter(Boolean).sort();
+  const newest = all.length ? all[all.length - 1] : null;
+  return (state.orderAt && (!newest || state.orderAt > newest)) ? state.orderAt
+       : (newest || new Date().toISOString());
+}
+
+// Writes what is in memory to THIS BROWSER and nothing else. Everything derived rather
+// than typed goes through here.
+function persistPrefs() {
+  const stamp = prefsStamp();
   try {
     localStorage.setItem(STORE_ORDER, JSON.stringify(
-      { days: state.order, plan: state.plan, updated_at: state.orderAt }));
+      { days: state.order, at: state.orderAtBy, plan: state.plan,
+        updated_at: stamp, schema: 3 }));
     localStorage.setItem(STORE_SETS, JSON.stringify(
-      { days: state.setsBy, updated_at: state.orderAt }));
+      { days: state.setsBy, at: state.setsAtBy, updated_at: stamp, schema: 3 }));
   } catch { /* private mode */ }
-  flushQueue();
+}
+
+// `days` is what this EDIT touched - weekday strings for the selected plan, or explicit
+// [plan, day] pairs. Only those get a new stamp, and only a day with a newer stamp can
+// overwrite another device's copy of it. Calling this with no days saves locally and
+// pushes nothing: a cleanup that changed nothing the user typed must never re-publish a
+// whole map, because a stale view doing exactly that is how a reorder and a set count
+// were being silently reverted a few seconds after being made.
+function savePrefs(days) {
+  const touched = (Array.isArray(days) ? days : []).filter(Boolean)
+    .map(d => Array.isArray(d) ? stampKey(d[0], d[1]) : stampKey(state.plan, d));
+  if (touched.length) {
+    const now = new Date().toISOString();
+    for (const k of touched) { state.orderAtBy[k] = now; state.setsAtBy[k] = now; }
+    state.orderAt = now;
+    state.orderDirty = true;
+  }
+  // Stamp first, THEN take in what another view of this page has written since this one
+  // loaded. In that order the edit just made always out-ranks the older copy, and the
+  // days this view has never seen are carried rather than erased - publishing a whole
+  // map assembled from one page's memory is what was wiping the other page's work.
+  absorbLocalPrefs();
+  persistPrefs();
+  if (touched.length) flushQueue();
+}
+
+// The same page open twice shares one localStorage, so this is the cheap half of the
+// merge - no network, and it runs before every write.
+function absorbLocalPrefs() {
+  try {
+    mergePrefsMap(state.order, state.orderAtBy,
+      JSON.parse(localStorage.getItem(STORE_ORDER) || "null"));
+    mergePrefsMap(state.setsBy, state.setsAtBy,
+      JSON.parse(localStorage.getItem(STORE_SETS) || "null"));
+  } catch { /* ignore */ }
+}
+
+// Merge one prefs document plan by plan and day by day. A day the remote stamped later
+// than this device did replaces the local copy; a day this device stamped later is kept
+// and pushed on the next flush. Neither side can take the whole week any more.
+// The stamp map is the authority, not the day map: a key WITH a stamp and no entry is a
+// deliberate clearing (Reset to file, or the last override on that day removed), and a
+// key with no stamp at all is one this document knows nothing about - the case that must
+// be left alone rather than treated as a deletion.
+function mergePrefsMap(localMap, localAt, doc) {
+  const remote = planKeyed((doc && doc.days) || {});
+  const rAt = atKeyed((doc && doc.at) || {});
+  const docStamp = String((doc && doc.updated_at) || "");
+  const keys = new Set(Object.keys(rAt));
+  for (const pid of Object.keys(remote))
+    for (const day of Object.keys(remote[pid] || {})) keys.add(stampKey(pid, day));
+  let changed = false;
+  for (const key of keys) {
+    const [pid, day] = splitKey(key);
+    const rs = String(rAt[key] || docStamp || "");
+    const ls = String(localAt[key] || "");
+    if (!rs || (ls && rs <= ls)) continue;          // this device knows that day better
+    const has = Object.prototype.hasOwnProperty.call(remote[pid] || {}, day);
+    const val = has ? JSON.parse(JSON.stringify(remote[pid][day])) : undefined;
+    if (JSON.stringify(atPath(localMap, pid, day)) !== JSON.stringify(val)) changed = true;
+    if (has) (localMap[pid] ||= {})[day] = val;
+    else if (localMap[pid]) {
+      delete localMap[pid][day];
+      if (!Object.keys(localMap[pid]).length) delete localMap[pid];
+    }
+    localAt[key] = rs;
+  }
+  return changed;
 }
 
 // Both prefs used to be keyed by weekday alone, from before plans existed. Anything
@@ -1123,18 +1219,38 @@ function planKeyed(days) {
     ? { [ACTIVE_PLAN]: days }
     : days;
 }
+// The same upgrade for a stamp map: bare weekday keys were written before plans existed
+// and belong to the plan that was active then.
+function atKeyed(at) {
+  if (!at || typeof at !== "object") return {};
+  const out = {};
+  for (const [k, v] of Object.entries(at))
+    out[DAYS.includes(k) ? stampKey(ACTIVE_PLAN, k) : k] = v;
+  return out;
+}
 const saveOrder = savePrefs;   // reordering and set counts share one prefs write
 function loadOrder() {
   try {
     const d = JSON.parse(localStorage.getItem(STORE_ORDER) || "null");
-    if (d && d.days) { state.order = planKeyed(d.days); state.orderAt = d.updated_at || null; }
+    if (d && d.days) {
+      state.order = planKeyed(d.days);
+      state.orderAt = d.updated_at || null;
+      state.orderAtBy = atKeyed(d.at);
+    }
     if (d && d.plan) state.plan = d.plan;
     const t = JSON.parse(localStorage.getItem(STORE_SETS) || "null");
     if (t && t.days) {
       state.setsBy = planKeyed(t.days);
+      state.setsAtBy = atKeyed(t.at);
       if (!state.orderAt || (t.updated_at && t.updated_at > state.orderAt))
         state.orderAt = t.updated_at;
     }
+    // A copy written before per-day stamps existed: give every day it holds the only
+    // stamp it has, so it still merges rather than being treated as never-edited.
+    for (const [map, at] of [[state.order, state.orderAtBy], [state.setsBy, state.setsAtBy]])
+      for (const pid of Object.keys(map))
+        for (const day of Object.keys(map[pid] || {}))
+          if (!at[stampKey(pid, day)]) at[stampKey(pid, day)] = state.orderAt || "";
   } catch { /* ignore */ }
   if (!planIds().includes(state.plan)) state.plan = ACTIVE_PLAN;
   pruneOverrides();
@@ -1157,7 +1273,10 @@ function pruneOverrides() {
     }
     if (!Object.keys(days).length) { delete state.setsBy[pid]; changed = true; }
   }
-  if (changed) savePrefs();
+  // Derived, not typed: this only drops overrides that already equal the file, so it
+  // saves locally and publishes nothing. Pushing here would stamp the whole week on
+  // every load and hand a freshly opened tab the power to overwrite a real edit.
+  if (changed) persistPrefs();
 }
 
 function saveRoutine() {
@@ -1209,7 +1328,7 @@ function defPanel(key, open) {
 // about a set count once already, and how they came to disagree about the exercise order
 // after that. So there is one entry point, every mutation goes through it, and no
 // renderer calls another.
-function renderAll() { renderToday(); renderTrends(); renderPlan(); }
+function renderAll() { pendingRender = false; renderToday(); renderTrends(); renderPlan(); }
 
 // The plan switcher. One chip per weekly plan, the selected one pressed. Switching
 // changes what Today prescribes and what the Plan tab edits, and nothing else: the set
@@ -1252,7 +1371,10 @@ function selectPlan(id) {
   if (id === state.plan) return;
   state.plan = id;
   state.pick = null;
-  savePrefs();                 // synced like the order, so the choice follows you
+  // No day changed, so nothing is stamped - stamping here would let merely LOOKING at
+  // another plan out-rank a real edit made elsewhere. The choice still has to reach the
+  // store, so it is persisted and flushed on its own.
+  persistPrefs(); state.orderDirty = true; flushQueue();
   renderAll();
   planEcho(`<b>${planName(id)} selected.</b> Today now prescribes from it. ` +
     `Logged history is untouched - trends, index, bridge and stalls read log.csv and ` +
@@ -1272,7 +1394,7 @@ function newPlan() {
   state.routineBy[id] = { name: name.trim(), week: blankWeek(), lifts: [] };
   saveRoutine();
   state.plan = id;
-  savePrefs();
+  persistPrefs(); state.orderDirty = true; flushQueue();
   renderAll();
   planEcho(`<b>${name.trim()} created, empty.</b> Add its lifts below, then Export - ` +
     `it lives on this device only until routine.yaml has it. A new plan also needs its ` +
@@ -1416,7 +1538,7 @@ function renderPlan() {
       if (sb[d]) {                     // no entry left for the override to apply to
         delete sb[d][ex];
         if (!Object.keys(sb[d]).length) delete sb[d];
-        savePrefs();
+        savePrefs([d]);
       }
       saveRoutine(); renderAll();
     };
@@ -1493,6 +1615,8 @@ function wireDefPanel(def) {
 // reordering across days is a different edit (move + remove) and out of scope here.
 const DRAG_SLOP = 8;          // px of travel before a touch counts as a drag, not a tap
 let gestureAt = 0;            // when the pointer path last handled a handle gesture
+let dragActive = false;       // a row is being dragged right now
+let pendingRender = false;    // remote state arrived while it was - render when it lands
 
 // Writes the ORDER, never the routine: a reorder must not mark the plan as structurally
 // edited, because it changes no volume and needs no export - and making it structural is
@@ -1508,7 +1632,7 @@ function commitOrder(day, fromIndex, toIndex) {
   names.splice(to, 0, moved);
   orderBy()[day] = names;
   state.pick = null;
-  saveOrder();
+  saveOrder([day]);
   renderAll();
   planEcho(
     `<b>${day} ${label(moved)} &rarr; #${to + 1} of ${names.length}.</b> ` +
@@ -1558,6 +1682,7 @@ function startDrag(e, row, day) {
 
   // Scrolling is suspended outright for the duration rather than trusted to
   // touch-action, so the browser has no reason left to claim the gesture mid-drag.
+  dragActive = true;
   const root = document.documentElement;
   const ta = root.style.touchAction, us = root.style.userSelect;
   root.style.touchAction = "none"; root.style.userSelect = "none";
@@ -1589,6 +1714,7 @@ function startDrag(e, row, day) {
     if (finished) return;
     finished = true;
     gestureAt = Date.now();
+    dragActive = false;
     detach();
     root.style.touchAction = ta; root.style.userSelect = us;
     // A cancel is a drop, not an abort. Scrolling is already suspended, so the cancels
@@ -1819,18 +1945,19 @@ async function pullRemote() {
     const [o, t] = await Promise.all([
       DB.doc("prefs/order").get(), DB.doc("prefs/sets").get()]);
     const od = o.exists ? o.data() : null, td = t.exists ? t.data() : null;
+    // Merged per plan and per day, in both directions, so a document written by a view
+    // that never saw this device's edit can no longer replace it. A local day that is
+    // newer simply survives the merge and is pushed on the next flush.
+    const a = mergePrefsMap(state.order, state.orderAtBy, od);
+    const b = mergePrefsMap(state.setsBy, state.setsAtBy, td);
+    // The SELECTED plan is a single value, not a per-day one, so it is still
+    // last-write-wins on the document stamp - and only while this device has nothing
+    // unflushed, or switching plans here would undo a switch made on the phone.
     const stamp = String(od?.updated_at || td?.updated_at || "");
-    if (!state.orderDirty && stamp && (!state.orderAt || stamp > state.orderAt)) {
-      if (od?.days) state.order = planKeyed(od.days);
-      if (od?.plan) state.plan = od.plan;
-      if (td?.days) state.setsBy = planKeyed(td.days);
-      state.orderAt = stamp;
-      try {
-        localStorage.setItem(STORE_ORDER,
-          JSON.stringify({ days: state.order, plan: state.plan, updated_at: state.orderAt }));
-        localStorage.setItem(STORE_SETS,
-          JSON.stringify({ days: state.setsBy, updated_at: state.orderAt }));
-      } catch { /* private mode */ }
+    if (od?.plan && !state.orderDirty && stamp && (!state.orderAt || stamp > state.orderAt))
+      state.plan = od.plan;
+    if (a || b) {
+      persistPrefs();
       pruneOverrides();   // the store may hold overrides a newer routine.yaml made moot
       changed = true;
     }
@@ -1848,10 +1975,33 @@ async function pullRemote() {
 // so nothing stays stale for longer than it takes to look away.
 function renderRemote() {
   if (!booted) return;
+  // A drag or a held row is a gesture in flight over rows this would replace underneath
+  // it. Let it finish - it re-renders when it lands.
+  if (dragActive || state.pick) { pendingRender = true; return; }
+  // Only TYPING is protected, and only until focus leaves the field. Skipping the render
+  // for anything focused inside the plan - a tapped drag handle included - and never
+  // coming back to it is how Plan kept showing an order state no longer held while Today
+  // showed the one it did.
   const el = document.activeElement;
-  if (el && el.closest && el.closest("#planweek")) return;
+  const typing = el && el.closest && el.closest("#planweek") &&
+    (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  if (typing) {
+    pendingRender = true;
+    el.addEventListener("blur", () => { if (pendingRender) { pendingRender = false; renderAll(); } },
+      { once: true });
+    return;
+  }
+  pendingRender = false;
   renderAll();
 }
+
+// The same page open in a second tab writes the same localStorage. Picking that up is
+// what stops two views of this app from showing two different plans.
+window.addEventListener("storage", (e) => {
+  if (e.key !== STORE_ORDER && e.key !== STORE_SETS) return;
+  absorbLocalPrefs();
+  renderRemote();
+});
 
 // One date at a time, stopping at the first failure so the queue keeps its order and
 // nothing is dropped on a flaky connection. A date with no local rows means the session
@@ -1880,14 +2030,30 @@ async function flushQueue() {
       saveQueue();
     }
     if (state.orderDirty) {
+      // The stamp is read once, before the writes: an edit made DURING them advances
+      // state.orderAt, and clearing the flag unconditionally afterwards is what would
+      // leave that edit sitting in this browser, never pushed and silently overwritten.
+      const at = state.orderAt;
       try {
+        // Read, merge, then write - never a blind publish. Whatever another device put
+        // there since this one loaded is folded in first, so pushing Monday's order
+        // cannot take Wednesday's set counts down with it.
+        const [o0, t0] = await Promise.all([
+          DB.doc("prefs/order").get(), DB.doc("prefs/sets").get()]);
+        const m1 = mergePrefsMap(state.order, state.orderAtBy, o0.exists ? o0.data() : null);
+        const m2 = mergePrefsMap(state.setsBy, state.setsAtBy, t0.exists ? t0.data() : null);
+        if (m1 || m2) persistPrefs();
+        const stamp = prefsStamp();
         await DB.doc("prefs/order").set(
-          { days: state.order, plan: state.plan, updated_at: state.orderAt, schema: 2 });
+          { days: state.order, at: state.orderAtBy, plan: state.plan,
+            updated_at: stamp, schema: 3 });
         await DB.doc("prefs/sets").set(
-          { days: state.setsBy, updated_at: state.orderAt, schema: 1 });
-        state.orderDirty = false;
+          { days: state.setsBy, at: state.setsAtBy, updated_at: stamp, schema: 3 });
+        if (state.orderAt === at) state.orderDirty = false;
+        if (m1 || m2) renderRemote();
       } catch (e) { setSync("error", dbErr(e)); flushing = false; return; }
     }
+
     await pullRemote();
     setSync("idle");
   } finally {
@@ -2375,7 +2541,10 @@ $("btn-reset").onclick = () => {
     state.dropped = 0;
     state.order = {};
     state.setsBy = {};
-    savePrefs();
+    state.orderAtBy = {};
+    state.setsAtBy = {};
+    // Every day of every plan changed, so every one of them has to out-stamp the store.
+    savePrefs(planIds().flatMap(p => DAYS.map(d => [p, d])));
     try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
     $("yamlout").hidden = true;
     renderAll();
