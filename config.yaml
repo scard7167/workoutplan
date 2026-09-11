@@ -19,13 +19,18 @@ athlete:
 # cycling and running do, and that load is not in this log. Their band is 0 and the
 # volume report labels them UNCOVERED rather than RED. Do not "fix" this by adding leg
 # work on the basis of this log.
+# 2026-09-11: four gym80 pull machines (3045 row, 3012N pullover, 3025 reverse
+# butterfly, 3020 back pull) were added to Friday at the user's request, turning it
+# from shoulders into shoulders+back. lats 16->28, upper_back 4->8 and rear_delts
+# 12->16 follow from that and nothing else moved. Rederived with
+#   python3 analyze.py bands --plan gym80
 volume_targets:
   chest:        {min: 18, target: 20, max: 24}
-  lats:         {min: 12, target: 16, max: 20}
-  upper_back:   {min: 2, target: 4, max: 7}
+  lats:         {min: 23, target: 28, max: 33}
+  upper_back:   {min: 6, target: 8, max: 10}
   front_delts:  {min: 6, target: 8, max: 10}
   side_delts:   {min: 14, target: 16, max: 20}
-  rear_delts:   {min: 10, target: 12, max: 15}
+  rear_delts:   {min: 13, target: 16, max: 19}
   biceps:       {min: 15, target: 16, max: 19}
   triceps:      {min: 19, target: 20, max: 23}
   quads:        {min: 6, target: 8, max: 12}

@@ -201,8 +201,8 @@ lat_pulldown_machine:
   # its own load curve, so it gets its own baseline. The product copy says "breite
   # Ruckenmuskulatur" (lats), so lats is the single prime mover - if it turns out to be a
   # row rather than a pulldown, upper_back belongs here as co-primary.
-  aliases: [gym80 3044, rueckenzugmaschine dual, ruckenzugmaschine dual, back pull
-            machine, lat pulldown machine, dual pulldown]
+  aliases: [gym80 3044, rueckenzugmaschine dual, ruckenzugmaschine dual,
+            back pull machine dual, lat pulldown machine, dual pulldown]
   muscles: [lats]
   increment: 5   # UNVERIFIED, see incline_chest_press_machine
   rep_range: [8, 12]
@@ -337,3 +337,51 @@ overhead_triceps_machine:
   increment: 5   # UNVERIFIED, see incline_chest_press_machine
   rep_range: [10, 15]
   image: images/overhead_triceps_machine.jpg
+
+rowing_machine:
+  # gym80 Sygnum Dual 3045 "Rudermaschine Dual" - plate-stack seated row, unilateral
+  # capable, adjustable chest pad, rotating handles. TWO prime movers, same as the
+  # `chest_supported_row` entry: a horizontal row is genuinely co-primary upper back and
+  # lats, which is one of the four cases CLAUDE.md allows a second muscle for.
+  aliases: [gym80 3045, rudermaschine dual, rudermaschine, rowing machine, machine row
+            dual, sygnum dual row]
+  muscles: [upper_back, lats]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/rowing_machine.jpg
+
+pullover_machine:
+  # gym80 Sygnum 3012N "Uberzugmaschine" - plate-stack pullover, 7-position seat pad.
+  # The product page credits it to back musculature; a pullover's prime mover is the lat.
+  # NOT co-primary chest: indirect pec work here is real but uncounted, same rule as
+  # triceps on a press.
+  aliases: [gym80 3012n, gym80 3012, uberzugmaschine, "überzugmaschine", pullover
+            machine, pullover, machine pullover]
+  muscles: [lats]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [10, 14]
+  image: images/pullover_machine.jpg
+
+reverse_fly_machine:
+  # gym80 Sygnum 3025 "Butterfly Reverse" - plate-stack reverse pec deck, two grip
+  # options, chest pad. Distinct unit from the free-weight `reverse_fly` entry and
+  # credited the same way it is: rear delts only. The page also names upper back, but
+  # `reverse_fly` has been rear_delts alone since the start and splitting the credit on
+  # one of the pair and not the other would make their volume incomparable.
+  aliases: [gym80 3025, butterfly reverse, reverse butterfly, reverse fly machine,
+            reverse pec deck machine, rear delt machine]
+  muscles: [rear_delts]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [12, 18]
+  image: images/reverse_fly_machine.jpg
+
+back_pull_machine:
+  # gym80 Sygnum 3020 "Ruckenzugmaschine" - plate-stack vertical pull with variable grips
+  # and a stabilisation element. Separate unit from `lat_pulldown_machine`; the page
+  # credits it to the broad back musculature, so lats.
+  aliases: [gym80 3020, ruckenzugmaschine, "rückenzugmaschine", back pull machine,
+            back pull, ruckenzug]
+  muscles: [lats]
+  increment: 5   # UNVERIFIED, see incline_chest_press_machine
+  rep_range: [8, 12]
+  image: images/back_pull_machine.jpg

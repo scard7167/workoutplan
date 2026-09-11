@@ -72,6 +72,10 @@ plans:
       - lateral_raise_machine
       - dip_machine
       - overhead_triceps_machine
+      - rowing_machine
+      - pullover_machine
+      - reverse_fly_machine
+      - back_pull_machine
 
     week:
       mon:
@@ -127,10 +131,14 @@ plans:
           - {exercise: triceps_pushdown, sets: 4}
           - {exercise: barbell_curl, sets: 4}
       fri:
-        name: shoulders
+        name: shoulders + back (gym80)
         plan:
           - {exercise: overhead_press, sets: 4}
           - {exercise: lateral_raise, sets: 4}
+          - {exercise: back_pull_machine, sets: 4}
+          - {exercise: rowing_machine, sets: 4}
+          - {exercise: pullover_machine, sets: 4}
+          - {exercise: reverse_fly_machine, sets: 4}
           - {exercise: face_pull, sets: 4}
           - {exercise: hanging_leg_raise, sets: 4}
       sat:

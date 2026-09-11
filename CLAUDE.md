@@ -14,6 +14,11 @@ the first number to revisit if recovery goes. The cycling already loads the legs
 design (see `uncovered_by_design` in config.yaml) and is never a reason to add calf work
 here. **Quads were uncovered too until 2026-09-09**, when a direct leg day was added to
 Wednesday at the user's request - they are now trained and measured like anything else.
+**On 2026-09-11 four gym80 pull machines were added to Friday** (3045 row, 3012N
+pullover, 3025 reverse butterfly, 3020 back pull), turning it from shoulders into
+shoulders+back: the week is 156 sets across days of 16-32, and lats (16->28),
+upper_back (4->8) and rear_delts (12->16) were rederived to match. Friday is now the
+biggest day of the week.
 
 ## Files
 
