@@ -143,7 +143,7 @@
     <section class="panel" id="p-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
       <div class="sessionhead">
         <div>
-          <div class="eyebrow">Weekly routine</div>
+          <div class="eyebrow" id="plan-sub">Weekly routine</div>
           <h1 id="plan-title"></h1>
         </div>
         <div class="progress" id="plan-summary"></div>
@@ -168,6 +168,11 @@
         <div id="scanout"></div>
       </section>
 
+      <div id="planpicker" class="planpicker"></div>
+      <label class="planrenamewrap">plan name
+        <input id="planrename" type="text" autocomplete="off" autocapitalize="words"
+               spellcheck="false" aria-label="rename this plan">
+      </label>
       <div class="scannote" id="plannote" hidden></div>
       <div class="scannote" id="plan-echo" aria-live="polite"></div>
       <div id="planweek"></div>

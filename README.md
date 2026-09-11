@@ -6,6 +6,10 @@ phone during the session.
 - `CLAUDE.md` is the operating manual - parsing rules, the progression rule, the feedback
   contract, the hard rules. Read that, not this.
 - `log.csv` is the append-only system of record (empty until the first session).
+- `routine.yaml` holds one or more weekly **plans** and a `schedule` of which was active
+  from when. Switching plans changes what is prescribed and which volume bands apply -
+  and nothing else. Trends, the strength index, the bridge, stalls and balance read
+  `log.csv`, which has no plan column, so a lift keeps its whole history across a switch.
 - `log.example.csv` holds 12 weeks of generated history so the analytics produce
   output on day zero - real output of `prescribe()`, not hand-typed.
 
@@ -22,6 +26,8 @@ bench 80x8 @2   log a set (exercise is sticky afterwards)
 ```
 python3 analyze.py validate --log log.example.csv
 python3 analyze.py volume   --log log.example.csv --window 7
+python3 analyze.py plans                       # the plans, and which is active
+python3 analyze.py bands --plan gym80          # the bands a plan delivers, to paste
 ```
 
 Requires Python 3.10+ and pyyaml.
@@ -30,7 +36,8 @@ Requires Python 3.10+ and pyyaml.
 
 A phone-first prototype: Today (the plan, prescribed loads, terse logging, the 3-line
 feedback contract), Trends (e1RM per lift, strength index, the volume-load bridge,
-stalls, balance, adherence), Plan (edit the weekly routine, export routine.yaml).
+stalls, balance, adherence), Plan (switch between weekly plans, edit one, export
+routine.yaml).
 Static HTML/CSS/JS, no build step, no backend.
 
 `web/data.js` embeds the exercise library, the routine, the bands and a full run of

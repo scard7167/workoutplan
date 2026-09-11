@@ -23,7 +23,7 @@ Wednesday at the user's request - they are now trained and measured like anythin
 | `log.csv` | append-only system of record, one row per working set |
 | `current_session.md` | scratch pad for the session in progress (untracked) |
 | `exercises.yaml` | exercise library - canonical names, aliases, increments, rep ranges |
-| `routine.yaml` | the plan - which lifts, how many sets, on which day. Source of truth for "what should happen"; bands in config.yaml are derived from it |
+| `routine.yaml` | the plans - one or more weekly plans, plus the `schedule` saying which was active from when. Source of truth for "what should happen"; bands in config.yaml are derived from it |
 | `config.yaml` | volume target bands (derived from routine.yaml), progression rule, thresholds |
 | `analyze.py` | all analytics: loader, volume, prescribe, progression, index, bridge, stalls, balance, adherence |
 | `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks - the example log is real output of the real rule, not hand-typed |
@@ -63,8 +63,36 @@ say so, do not pick one.
 
 ## The routine - the only source of "what should happen"
 
-`routine.yaml` names the lifts and, per weekday, how many sets of each. It is the plan;
-`log.csv` is what actually happened. `config.yaml`'s `volume_targets` are DERIVED from
+`routine.yaml` holds ONE OR MORE weekly **plans** and a `schedule` saying which was
+active from when. A plan is a whole week of lifts - a machine block, a free-weights
+block, a travel week. Exactly one is active at a time; it names the lifts and, per
+weekday, how many sets of each. It is the plan; `log.csv` is what actually happened.
+
+**Switching plans changes three things and nothing else**: what Today prescribes from,
+what the Plan tab edits, and which volume bands the sets are measured against. e1RM
+trends, the strength index, the volume-load bridge, stalls and balance all take only
+`rows, lib, cfg` - they never see the routine, because `log.csv` has no plan column and
+never will. A set is a set whoever scheduled it, so a lift that leaves the active plan
+keeps its whole history and keeps appearing in Trends. `all_lifts()` and
+`analytics_json()` deliberately iterate EVERY plan's lifts plus anything in the log:
+indexing those off the active plan is what would make a lift's history vanish the day
+you switch blocks, and that is the one thing plans must not do.
+
+The `schedule`, not a column in the log, is how a DATE maps to the plan that governed
+it. `plan_on(routine, date)` is the only way to ask. That is what lets `adherence`
+measure a fortnight straddling a switch against what was actually asked of you on each
+day, rather than retroactively rewriting the earlier half. `volume_report` picks the
+plan covering most of the window and names the others in `straddles` rather than
+silently choosing one.
+
+The single-plan shape this file started as - a top-level `week` and `lifts` - still
+loads, as the one plan `default`. `routine["week"]` and `routine["lifts"]` still mean
+the plan active TODAY, so every caller that predates plans keeps working.
+
+Bands are per plan: `volume_targets` is the default, `volume_targets_by_plan` overrides
+it. Adding a plan means deriving its bands - `python3 analyze.py bands --plan <id>`
+prints the block to paste. A plan judged against another plan's weekly volume reads RED
+everywhere and means nothing. `config.yaml`'s `volume_targets` are DERIVED from
 the routine - the target is what the routine delivers when followed as written, min/max
 are tolerance either side. Change the routine and the bands move with it, never the
 other way. `calves` has no routine lift and is marked
@@ -186,6 +214,9 @@ recomputes a deep metric in JavaScript.
   `balance_bands`
 - `python3 analyze.py adherence` - planned sets (from routine.yaml) vs logged, over
   `analysis.adherence_window` days
+- `python3 analyze.py plans` - every plan, its lifts and weekly sets, and which is active
+- `python3 analyze.py bands [--plan ID]` - the volume bands a plan DELIVERS, as a block
+  to paste into `config.yaml`. Bands are derived from the plan they measure, never guessed
 - `python3 analyze.py report` - all of the above, in order
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
@@ -306,6 +337,26 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   `routine.yaml` it was made against, and IS dropped when a newer one ships - the Plan
   tab says so out loud rather than letting it vanish unannounced.
 
+### Switching weekly plans on the phone
+
+The Plan tab carries one chip per plan; the selected one drives Today, the Plan tab and
+the bands. The choice is a synced pref (`prefs/order.plan`), so it follows you across
+devices like the order does.
+
+- **Order and set counts are per PLAN as well as per day** - `strengthlog.order.v1` and
+  `.sets.v1` are now `{planId: {day: ...}}`. They are overrides on a specific week of
+  lifts, so letting one plan's counts apply to another would quietly rewrite a block you
+  are not running. `planKeyed()` migrates the old flat `{day: ...}` shape by nesting it
+  under the plan that was active when it was written; it is detected by a weekday at the
+  top level, never guessed at.
+- **A new plan starts EMPTY, not as a copy.** A duplicate of the block you are already
+  running is a second copy of the same week that then drifts apart silently; a blank one
+  makes you say what the block is for.
+- **A plan the phone invented is local until exported**, exactly like a provisional
+  exercise - the chip says `not exported` and the export emits every plan plus a
+  `schedule` entry for the selected one. The export also reminds you to derive the new
+  plan's bands, because nothing else will.
+
 ### Provisional exercises
 
 The Plan tab's exercise field takes free text, and the photo dump proposes machines from
@@ -353,6 +404,10 @@ now quads are trained directly.
   running are not in it, so this log cannot see what the legs already carry. That the
   user has since chosen to add a leg day does not license recommending more.
   `calves` is uncovered by design; its report line is UNCOVERED, never RED.
+- **No analytic may be indexed off the ACTIVE plan.** Trends, the index, the bridge,
+  stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
+  lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
+  of Trends because a plan changed is a bug, not a filter.
 - **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
   will pass a module-level syntax error that stops the whole page loading. Use
   `node --input-type=module --check < web/app.js`, and load the page in a browser and

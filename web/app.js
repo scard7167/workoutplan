@@ -14,7 +14,8 @@
 // this session can no longer tell "hit the target" from "missed it," so a deload can
 // never be triggered from a Today-logged set. That trade is deliberate, made once here,
 // not something to silently work around elsewhere.
-import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE, ANALYTICS, SEED_LOG,
+import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE,
+         PLANS, SCHEDULE, ACTIVE_PLAN, BANDS_BY_PLAN, ANALYTICS, SEED_LOG,
          BUILD } from "./data.js";
 
 const MUSCLES = ["chest","lats","upper_back","front_delts","side_delts","rear_delts",
@@ -39,7 +40,7 @@ const state = {
   sticky: null,
   window: 7,
   logLimit: 8,
-  lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts[0],
+  lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts?.[0] || null,
   routine: null,     // null = use the file
   provisional: {},   // lifts that exist in this browser only - see below
   photos: [],        // machine photos waiting to be identified (this session only)
@@ -50,6 +51,9 @@ const state = {
   orderAt: null,     // when this device last changed either of them
   orderDirty: false, // changed but not yet in the store
   pick: null,            // the row tap-to-move has picked up, if any
+  plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
+  planName: {},          // renames and new plans this device made, id -> name
+  routineBy: {},         // structural edits, per plan
   dropped: 0,        // set-count edits discarded because a newer plan shipped
   queue: [],         // dates written here but not yet in the store
   sync: "off",       // off | idle | pending | error
@@ -156,7 +160,25 @@ function setDay(offset) {
 }
 setDay(0);
 
-const routine = () => state.routine || ROUTINE;
+// ------------------------------------------------------------------ plans
+// A weekly plan is a whole week of lifts. Several can exist - a machine block, a free
+// weights block, a travel week - and exactly one is SELECTED at a time: it is what Today
+// prescribes from, what the Plan tab edits, and what the volume bands are measured
+// against. Nothing else changes with it. e1RM trends, the strength index, the bridge,
+// stalls and balance all read log.csv, which has no plan column and never will: a set is
+// a set whoever scheduled it, so switching blocks never breaks a history.
+//
+// A plan this device invented is local until it is exported, exactly like a provisional
+// exercise - the file is still where the plan of record lives.
+const planIds = () => [...new Set([...Object.keys(PLANS), ...Object.keys(state.planName)])];
+const planName = (id) => state.planName[id] || PLANS[id]?.name || id;
+const blankWeek = () => Object.fromEntries(
+  DAYS.map(d => [d, { name: PLANS[ACTIVE_PLAN]?.week[d]?.name || d, plan: [] }]));
+// The FILE's version of the selected plan. A plan this device created has none, so it
+// starts from an empty week rather than borrowing another plan's lifts.
+const filePlan = () =>
+  PLANS[state.plan] || { name: planName(state.plan), week: blankWeek(), lifts: [] };
+const routine = () => state.routineBy[state.plan] || filePlan();
 // Cheap stable hash (djb2) of the shipped routine, used to tell whether a stored local
 // edit was made against the routine.yaml that is currently deployed.
 function routineFingerprint(r) {
@@ -649,13 +671,26 @@ function trendChip(p) {
          `${p.noisy ? " · noisy" : ""}</span>`;
 }
 
+// Every lift that has a history or a home in any plan - NOT the selected plan's lifts.
+// A trend belongs to the lift; indexing this off the selected plan is what would make a
+// lift's whole history vanish from Trends the moment you switch blocks, which is the one
+// thing plans must never do. analyze.py builds ANALYTICS.progression the same way.
+function trendLifts() {
+  const out = [];
+  for (const e of Object.keys(ANALYTICS.progression || {})) if (LIB[e]) out.push(e);
+  for (const pid of planIds())
+    for (const e of scheduledLifts(pid)) if (LIB[e] && !out.includes(e)) out.push(e);
+  for (const r of history()) if (LIB[r.exercise] && !out.includes(r.exercise)) out.push(r.exercise);
+  return out;
+}
+
 function renderLiftGrid() {
   const P = ANALYTICS.progression;
   $("trend-meta").textContent =
     ANALYTICS.sessions.length
       ? `best set per session · ${ANALYTICS.index.baseline_weeks}w baseline · to ${ANALYTICS.last_logged}`
       : "no sessions logged yet";
-  $("liftgrid").innerHTML = routine().lifts.map(e => {
+  $("liftgrid").innerHTML = trendLifts().map(e => {
     const p = P[e];
     const vals = (p?.points || []).map(x => x.value);
     return `<button class="lift" data-ex="${e}" aria-pressed="${state.lift === e}">
@@ -987,13 +1022,21 @@ function loadRoutine() {
     // one has shipped since, the stored copy is dropped and the file wins - otherwise
     // any device that ever opened the Plan tab would be pinned to that old snapshot
     // forever and would silently never see a deployed routine change again.
-    if (!d || !d.routine) return;
-    if (d.base === routineFingerprint(ROUTINE)) { state.routine = d.routine; return; }
+    if (!d) return;
+    // Plan NAMES are not tied to the file: a plan this device created, or renamed, must
+    // survive a publish or the switcher forgets what its own plans are called.
+    if (d.planName) state.planName = d.planName;
+    const by = d.routineBy || (d.routine ? { [ACTIVE_PLAN]: d.routine } : null);
+    if (!by) return;
+    if (d.base === routineFingerprint(PLANS)) { state.routineBy = by; return; }
     // A newer routine.yaml has shipped. The stored structural edits were made against a
     // plan that no longer exists, so they cannot be carried over - but saying nothing is
     // how a set-count change disappears without anyone noticing. Count it and show it.
-    state.dropped = DAYS.reduce((n, k) =>
-      n + (d.routine.week?.[k]?.plan?.length || 0), 0);
+    // A plan the file does not have is NOT dropped: nothing newer can have replaced it.
+    for (const [pid, r] of Object.entries(by)) {
+      if (!PLANS[pid]) { state.routineBy[pid] = r; continue; }
+      state.dropped += DAYS.reduce((n, k) => n + (r.week?.[k]?.plan?.length || 0), 0);
+    }
     try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
   } catch { /* ignore */ }
 }
@@ -1013,12 +1056,23 @@ const STORE_SETS = "strengthlog.sets.v1";
 // structural edit of it), with this device's set-count overrides applied, in this
 // device's order. Today, the Plan tab and the export all read this, so they cannot
 // disagree with each other.
-function effectivePlan(dayKey) {
-  const base = routine().week[dayKey].plan;
-  const ov = state.setsBy[dayKey] || {};
+// Order and set counts are per PLAN as well as per day. They are overrides on a
+// specific week of lifts, so letting one plan's counts apply to another would quietly
+// rewrite a block you are not running - and two blocks exist precisely because they are
+// not the same week.
+const orderOf = (pid) => (state.order[pid] ||= {});
+const setsOf = (pid) => (state.setsBy[pid] ||= {});
+const orderBy = () => orderOf(state.plan);
+const setsByPlan = () => setsOf(state.plan);
+const routineOf = (pid) => state.routineBy[pid] ||
+  PLANS[pid] || { name: planName(pid), week: blankWeek(), lifts: [] };
+
+function effectivePlan(dayKey, pid = state.plan) {
+  const base = routineOf(pid).week[dayKey].plan;
+  const ov = setsOf(pid)[dayKey] || {};
   const withSets = base.map(p =>
     ov[p.exercise] ? { ...p, sets: clamp(ov[p.exercise], 1, 8) } : p);
-  return orderedPlan(dayKey, withSets);
+  return orderedPlan(dayKey, withSets, pid);
 }
 
 // Set counts are stored BY EXERCISE NAME, exactly like the order and for exactly the
@@ -1028,15 +1082,16 @@ function effectivePlan(dayKey) {
 // file is not an override at all, so it is dropped rather than left to shadow a later
 // change silently.
 function setOverride(dayKey, exercise, n) {
-  const fileSets = ROUTINE.week[dayKey]?.plan.find(p => p.exercise === exercise)?.sets;
-  const day = state.setsBy[dayKey] || (state.setsBy[dayKey] = {});
+  const fileSets = filePlan().week[dayKey]?.plan.find(p => p.exercise === exercise)?.sets;
+  const all = setsByPlan();
+  const day = all[dayKey] || (all[dayKey] = {});
   if (n === fileSets) delete day[exercise]; else day[exercise] = n;
-  if (!Object.keys(day).length) delete state.setsBy[dayKey];
+  if (!Object.keys(day).length) delete all[dayKey];
   savePrefs();
 }
 
-function orderedPlan(dayKey, plan) {
-  const want = state.order[dayKey];
+function orderedPlan(dayKey, plan, pid = state.plan) {
+  const want = orderOf(pid)[dayKey];
   if (!Array.isArray(want) || !want.length) return plan;
   const rank = new Map(want.map((e, i) => [e, i]));
   // Stable: anything the stored order has never seen keeps its file position, after
@@ -1051,24 +1106,37 @@ function savePrefs() {
   state.orderDirty = true;
   try {
     localStorage.setItem(STORE_ORDER, JSON.stringify(
-      { days: state.order, updated_at: state.orderAt }));
+      { days: state.order, plan: state.plan, updated_at: state.orderAt }));
     localStorage.setItem(STORE_SETS, JSON.stringify(
       { days: state.setsBy, updated_at: state.orderAt }));
   } catch { /* private mode */ }
   flushQueue();
 }
+
+// Both prefs used to be keyed by weekday alone, from before plans existed. Anything
+// stored in that shape belongs to the plan that was active then - the one the file
+// shipped - so it is nested under it rather than thrown away or, worse, left to apply to
+// every plan at once. Detected by the keys: a weekday key at the top means the old shape.
+function planKeyed(days) {
+  if (!days || typeof days !== "object") return {};
+  return Object.keys(days).some(k => DAYS.includes(k))
+    ? { [ACTIVE_PLAN]: days }
+    : days;
+}
 const saveOrder = savePrefs;   // reordering and set counts share one prefs write
 function loadOrder() {
   try {
     const d = JSON.parse(localStorage.getItem(STORE_ORDER) || "null");
-    if (d && d.days) { state.order = d.days; state.orderAt = d.updated_at || null; }
+    if (d && d.days) { state.order = planKeyed(d.days); state.orderAt = d.updated_at || null; }
+    if (d && d.plan) state.plan = d.plan;
     const t = JSON.parse(localStorage.getItem(STORE_SETS) || "null");
     if (t && t.days) {
-      state.setsBy = t.days;
+      state.setsBy = planKeyed(t.days);
       if (!state.orderAt || (t.updated_at && t.updated_at > state.orderAt))
         state.orderAt = t.updated_at;
     }
   } catch { /* ignore */ }
+  if (!planIds().includes(state.plan)) state.plan = ACTIVE_PLAN;
   pruneOverrides();
 }
 
@@ -1077,12 +1145,17 @@ function loadOrder() {
 // cannot leave redundant entries behind that count as drift and shadow the file.
 function pruneOverrides() {
   let changed = false;
-  for (const day of Object.keys(state.setsBy)) {
-    const file = new Map((ROUTINE.week[day]?.plan || []).map(p => [p.exercise, p.sets]));
-    for (const ex of Object.keys(state.setsBy[day])) {
-      if (file.get(ex) === state.setsBy[day][ex]) { delete state.setsBy[day][ex]; changed = true; }
+  for (const pid of Object.keys(state.setsBy)) {
+    const week = (PLANS[pid] || {}).week;
+    if (!week) continue;              // a plan of this device's own - no file to compare to
+    const days = state.setsBy[pid];
+    for (const day of Object.keys(days)) {
+      const file = new Map((week[day]?.plan || []).map(p => [p.exercise, p.sets]));
+      for (const ex of Object.keys(days[day]))
+        if (file.get(ex) === days[day][ex]) { delete days[day][ex]; changed = true; }
+      if (!Object.keys(days[day]).length) { delete days[day]; changed = true; }
     }
-    if (!Object.keys(state.setsBy[day]).length) { delete state.setsBy[day]; changed = true; }
+    if (!Object.keys(days).length) { delete state.setsBy[pid]; changed = true; }
   }
   if (changed) savePrefs();
 }
@@ -1090,11 +1163,13 @@ function pruneOverrides() {
 function saveRoutine() {
   try {
     localStorage.setItem(STORE_ROUTINE, JSON.stringify(
-      { base: routineFingerprint(ROUTINE), routine: state.routine }));
+      { base: routineFingerprint(PLANS), routineBy: state.routineBy,
+        planName: state.planName }));
   } catch { /* private mode */ }
 }
 function ensureEditable() {
-  if (!state.routine) state.routine = JSON.parse(JSON.stringify(ROUTINE));
+  if (!state.routineBy[state.plan])
+    state.routineBy[state.plan] = JSON.parse(JSON.stringify(filePlan()));
 }
 
 // A provisional lift's missing half. Shown open while the lift is unusable, so the
@@ -1136,10 +1211,80 @@ function defPanel(key, open) {
 // renderer calls another.
 function renderAll() { renderToday(); renderTrends(); renderPlan(); }
 
+// The plan switcher. One chip per weekly plan, the selected one pressed. Switching
+// changes what Today prescribes and what the Plan tab edits, and nothing else: the set
+// counts and the order follow the plan they were set on, and every trend keeps reading
+// log.csv, which does not know plans exist.
+function renderPlanPicker() {
+  const el = $("planpicker");
+  if (!el) return;
+  const ids = planIds();
+  el.innerHTML =
+    ids.map(id => {
+      const sets = DAYS.reduce((a, d) => a + effectivePlan(d, id).reduce((x, p) => x + p.sets, 0), 0);
+      const local = !PLANS[id];
+      return `<button class="planchip ${id === state.plan ? "on" : ""} ${local ? "local" : ""}"
+        data-plan="${id}" aria-pressed="${id === state.plan}">
+        <span class="pn">${planName(id)}</span>
+        <span class="ps">${sets} sets/wk${local ? " &middot; not exported" : ""}</span>
+      </button>`;
+    }).join("") +
+    `<button class="planchip add" data-role="newplan">+ new plan</button>`;
+
+  for (const b of el.querySelectorAll("[data-plan]"))
+    b.onclick = () => selectPlan(b.dataset.plan);
+  el.querySelector('[data-role="newplan"]').onclick = newPlan;
+
+  const ren = $("planrename");
+  if (ren) {
+    ren.value = planName(state.plan);
+    ren.onchange = () => {
+      const v = ren.value.trim();
+      if (!v || v === planName(state.plan)) { ren.value = planName(state.plan); return; }
+      state.planName[state.plan] = v;
+      saveRoutine(); renderAll();
+      planEcho(`<b>Renamed to ${v}.</b> Names live on this device until you Export.`);
+    };
+  }
+}
+
+function selectPlan(id) {
+  if (id === state.plan) return;
+  state.plan = id;
+  state.pick = null;
+  savePrefs();                 // synced like the order, so the choice follows you
+  renderAll();
+  planEcho(`<b>${planName(id)} selected.</b> Today now prescribes from it. ` +
+    `Logged history is untouched - trends, index, bridge and stalls read log.csv and ` +
+    `do not know which plan produced a set.`);
+}
+
+// A new plan starts EMPTY, not as a copy. A duplicate of the block you are already
+// running is a second copy of the same week that then drifts; a blank one makes you say
+// what the block is for. Days keep their names so the week is still recognisable.
+function newPlan() {
+  const name = prompt("Name this plan (e.g. travel week, deload, free weights)");
+  if (!name || !name.trim()) return;
+  const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
+    || `plan_${planIds().length + 1}`;
+  if (planIds().includes(id)) { planEcho(`<b>${id} already exists.</b>`); return; }
+  state.planName[id] = name.trim();
+  state.routineBy[id] = { name: name.trim(), week: blankWeek(), lifts: [] };
+  saveRoutine();
+  state.plan = id;
+  savePrefs();
+  renderAll();
+  planEcho(`<b>${name.trim()} created, empty.</b> Add its lifts below, then Export - ` +
+    `it lives on this device only until routine.yaml has it. A new plan also needs its ` +
+    `own volume bands: <code>python3 analyze.py bands --plan ${id}</code>.`);
+}
+
 function renderPlan() {
   const r = routine();
   const planned = DAYS.reduce((a, d) => a + effectivePlan(d).reduce((x, p) => x + p.sets, 0), 0);
   $("plan-title").textContent = `${planned} sets / week`;
+  const sub = $("plan-sub");
+  if (sub) sub.textContent = planIds().length > 1 ? planName(state.plan) : "Weekly routine";
   // Two different kinds of edit, and conflating them is what loses work. Order is
   // stored and needs nothing further. Set counts and lift changes move a muscle's
   // weekly volume, and the bands in config.yaml are DERIVED from that - so until they
@@ -1159,6 +1304,7 @@ function renderPlan() {
 
   const echo = $("plan-echo");
   if (echo) echo.innerHTML = "";
+  renderPlanPicker();
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
 
@@ -1211,7 +1357,7 @@ function renderPlan() {
 
   for (const row of $("planweek").querySelectorAll(".dayrow")) {
     const d = row.dataset.day, ex = row.dataset.ex;
-    const at = () => (state.routine || ROUTINE).week[d].plan.findIndex(x => x.exercise === ex);
+    const at = () => routine().week[d].plan.findIndex(x => x.exercise === ex);
     const cur = () => effectivePlan(d).find(x => x.exercise === ex)?.sets ?? 1;
     row.querySelector('[data-role="ex"]').onchange = (e) => {
       const typed = e.target.value;
@@ -1226,7 +1372,7 @@ function renderPlan() {
         minted = true;
       }
       if (!key || key === was) { renderAll(); return; }
-      ensureEditable(); state.routine.week[d].plan[at()].exercise = key;
+      ensureEditable(); state.routineBy[state.plan].week[d].plan[at()].exercise = key;
       saveRoutine(); renderAll();
       if (minted) showFeedback(
         `<span class="l1">${label(key)} added to ${d}</span>\n` +
@@ -1265,10 +1411,11 @@ function renderPlan() {
     row.querySelector('[data-role="dec"]').onclick = () => setsTo(cur() - 1);
     row.querySelector('[data-role="rm"]').onclick = () => {
       if (!confirm(`Remove ${label(ex)} from ${d}?`)) return;
-      ensureEditable(); state.routine.week[d].plan.splice(at(), 1);
-      if (state.setsBy[d]) {           // no entry left for the override to apply to
-        delete state.setsBy[d][ex];
-        if (!Object.keys(state.setsBy[d]).length) delete state.setsBy[d];
+      ensureEditable(); state.routineBy[state.plan].week[d].plan.splice(at(), 1);
+      const sb = setsByPlan();
+      if (sb[d]) {                     // no entry left for the override to apply to
+        delete sb[d][ex];
+        if (!Object.keys(sb[d]).length) delete sb[d];
         savePrefs();
       }
       saveRoutine(); renderAll();
@@ -1287,7 +1434,8 @@ function renderPlan() {
   for (const btn of $("planweek").querySelectorAll('[data-role="add"]')) {
     btn.onclick = () => {
       ensureEditable();
-      state.routine.week[btn.dataset.day].plan.push({ exercise: r.lifts[0], sets: 2 });
+      state.routineBy[state.plan].week[btn.dataset.day].plan.push(
+        { exercise: r.lifts?.[0] || Object.keys(LIB)[0], sets: 4 });
       // the new row's combobox is where you type what it actually is
       saveRoutine(); renderAll();
     };
@@ -1358,7 +1506,7 @@ function commitOrder(day, fromIndex, toIndex) {
   if (to === fromIndex) { renderAll(); return false; }
   const [moved] = names.splice(fromIndex, 1);
   names.splice(to, 0, moved);
-  state.order[day] = names;
+  orderBy()[day] = names;
   state.pick = null;
   saveOrder();
   renderAll();
@@ -1474,8 +1622,12 @@ function startDrag(e, row, day) {
 // a lift added or removed, and a set count changed.
 function countStructuralEdits() {
   let n = 0;
+  // Against the file's copy of the SELECTED plan. A plan this device invented has no
+  // file copy at all, so every one of its lifts is drift - which is true: none of it has
+  // reached routine.yaml yet.
+  const fw = (PLANS[state.plan] || {}).week;
   for (const d of DAYS) {
-    const file = new Map(ROUTINE.week[d].plan.map(p => [p.exercise, p.sets]));
+    const file = new Map((fw?.[d]?.plan || []).map(p => [p.exercise, p.sets]));
     const now = new Map(effectivePlan(d).map(p => [p.exercise, p.sets]));
     for (const [ex, sets] of now) n += !file.has(ex) ? 1 : (file.get(ex) !== sets ? 1 : 0);
     for (const ex of file.keys()) if (!now.has(ex)) n += 1;
@@ -1511,11 +1663,13 @@ function renderPlanNote(structural) {
 
 // Derived, never carried: analyze.py requires lifts and the schedule to agree exactly,
 // and the stored `lifts` list goes stale the moment a lift is added in the browser.
-const scheduledLifts = () =>
-  [...new Set(DAYS.flatMap(d => effectivePlan(d).map(p => p.exercise)))].sort();
+const scheduledLifts = (pid = state.plan) =>
+  [...new Set(DAYS.flatMap(d => effectivePlan(d, pid).map(p => p.exercise)))].sort();
+const allScheduledLifts = () =>
+  [...new Set(planIds().flatMap(p => scheduledLifts(p)))].sort();
 
 function exportYaml() {
-  const scheduled = scheduledLifts();
+  const scheduled = allScheduledLifts();
   const out = $("yamlout");
   out.hidden = false;
 
@@ -1550,12 +1704,36 @@ function exportYaml() {
     }
     lines.push("# ===== end exercises.yaml", "");
   }
-  lines.push("lifts:", ...scheduled.map(l => `  - ${l}`), "", "week:");
-  for (const d of DAYS) {
-    lines.push(`  ${d}:`, `    name: ${routine().week[d].name}`, "    plan:");
-    for (const p of effectivePlan(d))
-      lines.push(`      - {exercise: ${p.exercise}, sets: ${p.sets}}`);
+  // Every plan, not just the one on screen, and the schedule that says which is active
+  // from when. `lifts` is omitted per plan on purpose: analyze.py derives it from what
+  // the week actually schedules, and a carried copy is the thing that goes stale.
+  lines.push("plans:");
+  for (const pid of planIds()) {
+    lines.push(`  ${pid}:`, `    name: ${JSON.stringify(planName(pid))}`, "    week:");
+    for (const d of DAYS) {
+      const rows = effectivePlan(d, pid);
+      lines.push(`      ${d}:`,
+                 `        name: ${JSON.stringify(routineOf(pid).week[d].name)}`,
+                 // A rest day has to say so explicitly: a bare `plan:` reads back as
+                 // null, not as an empty list, and the loader would reject the file.
+                 rows.length ? "        plan:" : "        plan: []");
+      for (const p of rows)
+        lines.push(`          - {exercise: ${p.exercise}, sets: ${p.sets}}`);
+    }
   }
+  lines.push("", "schedule:");
+  const known = new Map(SCHEDULE.map(e => [e.plan, e.from]));
+  for (const e of SCHEDULE) lines.push(`  - {plan: ${e.plan}, from: ${e.from}}`);
+  // The selected plan is what this device is training. If the file's schedule does not
+  // already end on it, say so with today's date rather than leaving analyze.py measuring
+  // adherence against a block that was swapped out on the phone weeks ago.
+  if (SCHEDULE[SCHEDULE.length - 1]?.plan !== state.plan)
+    lines.push(`  - {plan: ${state.plan}, from: ${isoDate(new Date())}}` +
+               (known.has(state.plan) ? "" : "    # new plan, first activated here"));
+  lines.push("", "# Bands are DERIVED from the plan they measure. For a NEW plan run",
+             "#   python3 analyze.py bands --plan <id>",
+             "# and paste the block under volume_targets_by_plan in config.yaml -",
+             "# otherwise it is judged against another plan's weekly volume.");
   out.textContent = lines.join("\n");
 }
 
@@ -1643,12 +1821,13 @@ async function pullRemote() {
     const od = o.exists ? o.data() : null, td = t.exists ? t.data() : null;
     const stamp = String(od?.updated_at || td?.updated_at || "");
     if (!state.orderDirty && stamp && (!state.orderAt || stamp > state.orderAt)) {
-      if (od?.days) state.order = od.days;
-      if (td?.days) state.setsBy = td.days;
+      if (od?.days) state.order = planKeyed(od.days);
+      if (od?.plan) state.plan = od.plan;
+      if (td?.days) state.setsBy = planKeyed(td.days);
       state.orderAt = stamp;
       try {
         localStorage.setItem(STORE_ORDER,
-          JSON.stringify({ days: state.order, updated_at: state.orderAt }));
+          JSON.stringify({ days: state.order, plan: state.plan, updated_at: state.orderAt }));
         localStorage.setItem(STORE_SETS,
           JSON.stringify({ days: state.setsBy, updated_at: state.orderAt }));
       } catch { /* private mode */ }
@@ -1703,7 +1882,7 @@ async function flushQueue() {
     if (state.orderDirty) {
       try {
         await DB.doc("prefs/order").set(
-          { days: state.order, updated_at: state.orderAt, schema: 1 });
+          { days: state.order, plan: state.plan, updated_at: state.orderAt, schema: 2 });
         await DB.doc("prefs/sets").set(
           { days: state.setsBy, updated_at: state.orderAt, schema: 1 });
         state.orderDirty = false;
@@ -1913,7 +2092,7 @@ function acceptProposal(pr) {
   }
   if (!key) return;
   ensureEditable();
-  state.routine.week[pr.day].plan.push({ exercise: key, sets: clamp(pr.sets, 1, 8) });
+  state.routineBy[state.plan].week[pr.day].plan.push({ exercise: key, sets: clamp(pr.sets, 1, 8) });
   saveRoutine();
   state.proposals = state.proposals.filter(x => x !== pr);
   if (photo) state.photos = state.photos.filter(p => p.id !== photo.id);
@@ -2192,7 +2371,7 @@ for (const b of document.querySelectorAll("#volseg button")) {
 $("btn-yaml").onclick = exportYaml;
 $("btn-reset").onclick = () => {
   if (confirm("Discard your edits - set counts, lifts AND your exercise order - and reload routine.yaml as published?")) {
-    state.routine = null;
+    state.routineBy = {}; state.planName = {};
     state.dropped = 0;
     state.order = {};
     state.setsBy = {};

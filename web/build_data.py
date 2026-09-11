@@ -30,7 +30,22 @@ LOG_PATH = os.path.join(ROOT, LOG_NAME)
 lib = yaml.safe_load(open(os.path.join(ROOT, "exercises.yaml")))
 cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
 rows = list(csv.DictReader(open(LOG_PATH)))
-routine = yaml.safe_load(open(os.path.join(ROOT, "routine.yaml")))
+# The routine goes through analyze.py's loader rather than straight from YAML: that is
+# where the single-plan and multi-plan shapes are normalised and validated, and the app
+# must see exactly the plans analyze.py sees or the two disagree about what the plan is.
+sys.path.insert(0, ROOT)
+import analyze as _an                                                # noqa: E402
+_lib = _an.load_exercises()
+_routine = _an.load_routine(_lib)
+PLANS = {pid: {"name": p["name"], "lifts": p["lifts"], "week": p["week"]}
+         for pid, p in _routine["plans"].items()}
+SCHEDULE = [{"plan": e["plan"], "from": e["from"].isoformat()} for e in _routine["schedule"]]
+ACTIVE = _routine["active"]
+# ROUTINE stays the ACTIVE plan, so everything that read it before plans existed still
+# reads what it meant.
+routine = {"name": PLANS[ACTIVE]["name"], "lifts": PLANS[ACTIVE]["lifts"],
+           "week": PLANS[ACTIVE]["week"]}
+BANDS_BY_PLAN = {pid: _an.bands_for(cfg, pid) for pid in PLANS}
 # Deep analytics are computed once by analyze.py and embedded. The browser renders
 # these numbers; it never recomputes them. One implementation, no drift.
 subprocess.run([sys.executable, os.path.join(ROOT, "analyze.py"), "json",
@@ -59,6 +74,9 @@ BAND_JSON = json.dumps(cfg["volume_targets"], separators=COMPACT)
 METRIC_JSON = json.dumps(cfg["metrics"], separators=COMPACT)
 PROG_JSON = json.dumps(cfg["progression"], separators=COMPACT)
 ROUTINE_JSON = json.dumps(routine, separators=COMPACT)
+PLANS_JSON = json.dumps(PLANS, separators=COMPACT)
+SCHEDULE_JSON = json.dumps(SCHEDULE, separators=COMPACT)
+BANDS_BY_PLAN_JSON = json.dumps(BANDS_BY_PLAN, separators=COMPACT)
 UNCOVERED_JSON = json.dumps(cfg.get("uncovered_by_design", []), separators=COMPACT)
 ANALYTICS_JSON = json.dumps(analytics, separators=COMPACT)
 LOG_JSON = json.dumps(log, separators=COMPACT)
@@ -73,6 +91,10 @@ out = (f"// GENERATED from exercises.yaml, config.yaml, routine.yaml, {LOG_NAME}
        f"export const METRICS = {METRIC_JSON};\n\n"
        f"export const PROGRESSION = {PROG_JSON};\n\n"
        f"export const ROUTINE = {ROUTINE_JSON};\n\n"
+       f"export const PLANS = {PLANS_JSON};\n\n"
+       f"export const SCHEDULE = {SCHEDULE_JSON};\n\n"
+       f"export const ACTIVE_PLAN = {json.dumps(ACTIVE)};\n\n"
+       f"export const BANDS_BY_PLAN = {BANDS_BY_PLAN_JSON};\n\n"
        f"export const ANALYTICS = {ANALYTICS_JSON};\n\n"
        f"export const SEED_LOG = {LOG_JSON};\n\n"
        f"export const BUILD = {json.dumps(BUILD)};\n")

@@ -25,106 +25,128 @@
 # `sets` is the TARGET working sets for that lift on that day. Loads never live here -
 # they come from the progression rule, always.
 
-lifts:
-  - bench_press
-  - pullup
-  - chest_supported_row
-  - overhead_press
-  - lateral_raise
-  - face_pull
-  - barbell_curl
-  - triceps_pushdown
-  - romanian_deadlift
-  - hanging_leg_raise
-  - incline_chest_press_machine
-  - standing_chest_press_machine
-  - seated_chest_press_machine
-  - lat_pulldown_machine
-  - shoulder_press_machine
-  - standing_lateral_raise_machine
-  - biceps_machine
-  - horizontal_biceps_machine
-  - triceps_machine
-  - leg_press_machine
-  - leg_extension_machine
-  - seated_leg_curl_machine
-  - hip_abduction_machine
-  - hip_thrust_machine
-  - lateral_raise_machine
-  - dip_machine
-  - overhead_triceps_machine
+# ONE OR MORE weekly plans, and a schedule saying which was active from when.
+# A plan is a whole week of lifts - a machine block, a free-weights block, a travel
+# week. Exactly one is active at a time: it is what Today prescribes from and what the
+# volume bands are measured against. Nothing else changes with it. e1RM trends, the
+# strength index, the bridge, stalls and balance all read log.csv, which has no plan
+# column and never will - a set is a set whoever scheduled it, so a lift that leaves
+# the active plan keeps its whole history and keeps appearing in Trends.
+#
+# The schedule, not a column in the log, is how a DATE maps to the plan that governed
+# it. That is what lets adherence for a fortnight that straddles a switch measure each
+# day against what was actually asked of you that day.
+#
+# Adding a plan: build it in the web app's Plan tab and Export, or write it here. Then
+# derive its bands - `python3 analyze.py bands --plan <id>` - and paste them under
+# volume_targets_by_plan in config.yaml. A plan judged against another plan's weekly
+# volume reads RED everywhere and means nothing.
+plans:
+  gym80:
+    name: gym80 block
+    lifts:
+      - bench_press
+      - pullup
+      - chest_supported_row
+      - overhead_press
+      - lateral_raise
+      - face_pull
+      - barbell_curl
+      - triceps_pushdown
+      - romanian_deadlift
+      - hanging_leg_raise
+      - incline_chest_press_machine
+      - standing_chest_press_machine
+      - seated_chest_press_machine
+      - lat_pulldown_machine
+      - shoulder_press_machine
+      - standing_lateral_raise_machine
+      - biceps_machine
+      - horizontal_biceps_machine
+      - triceps_machine
+      - leg_press_machine
+      - leg_extension_machine
+      - seated_leg_curl_machine
+      - hip_abduction_machine
+      - hip_thrust_machine
+      - lateral_raise_machine
+      - dip_machine
+      - overhead_triceps_machine
 
-week:
-  mon:
-    name: chest + triceps (gym80)
-    plan:
-      - {exercise: incline_chest_press_machine, sets: 4}
-      - {exercise: standing_chest_press_machine, sets: 4}
-      - {exercise: seated_chest_press_machine, sets: 4}
-      - {exercise: lateral_raise_machine, sets: 4}
-      - {exercise: dip_machine, sets: 4}
-      - {exercise: overhead_triceps_machine, sets: 4}
-  tue:
-    # Rebuilt on the gym80 machines, the same way mon was. Where a machine is a direct
-    # substitute it REPLACES the free-weight lift rather than joining it - pullup ->
-    # 3044, overhead_press -> 3032, barbell_curl -> 3010 - so lats, front_delts and
-    # biceps keep exactly their old weekly volume. face_pull stays: none of these five
-    # machines trains rear delts. 3099, 3011 and 3098 are genuinely new work here, and
-    # they are the only reason any band moved (side_delts +3, triceps +2, biceps +2).
-    # pullup, overhead_press and barbell_curl all still appear on other days.
-    # 3098 "Bizeps horizontal" sits ALONGSIDE 3010, not instead of it: two biceps
-    # machines at different arm angles, 4 biceps sets on the day.
-    name: pull + overhead (gym80)
-    plan:
-      - {exercise: lat_pulldown_machine, sets: 4}
-      - {exercise: shoulder_press_machine, sets: 4}
-      - {exercise: standing_lateral_raise_machine, sets: 4}
-      - {exercise: face_pull, sets: 4}
-      - {exercise: biceps_machine, sets: 4}
-      - {exercise: horizontal_biceps_machine, sets: 4}
-      - {exercise: triceps_machine, sets: 4}
-  wed:
-    # Was "hinge + core" (RDL, hanging leg raise, lateral raise, chest supported row).
-    # Rebuilt as a LEG day on the gym80 machines. This is a deliberate reversal of a
-    # design constraint at the top of this file: quads were uncovered BY DESIGN because
-    # the cycling and running already load them. They are now trained here, so quads has
-    # come out of uncovered_by_design in config.yaml and is measured like any other
-    # muscle. Recovery, not gym time, is still the binding constraint.
-    # romanian_deadlift, lateral_raise and chest_supported_row all still appear on other
-    # days, so no muscle lost its only lift; hanging_leg_raise stays as the core slot.
-    name: legs (gym80)
-    plan:
-      - {exercise: leg_press_machine, sets: 4}
-      - {exercise: leg_extension_machine, sets: 4}
-      - {exercise: seated_leg_curl_machine, sets: 4}
-      - {exercise: hip_thrust_machine, sets: 4}
-      - {exercise: hip_abduction_machine, sets: 4}
-      - {exercise: hanging_leg_raise, sets: 4}
-  thu:
-    name: heavy pair
-    plan:
-      - {exercise: bench_press, sets: 4}
-      - {exercise: pullup, sets: 4}
-      - {exercise: triceps_pushdown, sets: 4}
-      - {exercise: barbell_curl, sets: 4}
-  fri:
-    name: shoulders
-    plan:
-      - {exercise: overhead_press, sets: 4}
-      - {exercise: lateral_raise, sets: 4}
-      - {exercise: face_pull, sets: 4}
-      - {exercise: hanging_leg_raise, sets: 4}
-  sat:
-    name: row + hinge
-    plan:
-      - {exercise: chest_supported_row, sets: 4}
-      - {exercise: romanian_deadlift, sets: 4}
-      - {exercise: barbell_curl, sets: 4}
-      - {exercise: triceps_pushdown, sets: 4}
-  sun:
-    name: full
-    plan:
-      - {exercise: bench_press, sets: 4}
-      - {exercise: pullup, sets: 4}
-      - {exercise: lateral_raise, sets: 4}
-      - {exercise: face_pull, sets: 4}
+    week:
+      mon:
+        name: chest + triceps (gym80)
+        plan:
+          - {exercise: incline_chest_press_machine, sets: 4}
+          - {exercise: standing_chest_press_machine, sets: 4}
+          - {exercise: seated_chest_press_machine, sets: 4}
+          - {exercise: lateral_raise_machine, sets: 4}
+          - {exercise: dip_machine, sets: 4}
+          - {exercise: overhead_triceps_machine, sets: 4}
+      tue:
+        # Rebuilt on the gym80 machines, the same way mon was. Where a machine is a direct
+        # substitute it REPLACES the free-weight lift rather than joining it - pullup ->
+        # 3044, overhead_press -> 3032, barbell_curl -> 3010 - so lats, front_delts and
+        # biceps keep exactly their old weekly volume. face_pull stays: none of these five
+        # machines trains rear delts. 3099, 3011 and 3098 are genuinely new work here, and
+        # they are the only reason any band moved (side_delts +3, triceps +2, biceps +2).
+        # pullup, overhead_press and barbell_curl all still appear on other days.
+        # 3098 "Bizeps horizontal" sits ALONGSIDE 3010, not instead of it: two biceps
+        # machines at different arm angles, 4 biceps sets on the day.
+        name: pull + overhead (gym80)
+        plan:
+          - {exercise: lat_pulldown_machine, sets: 4}
+          - {exercise: shoulder_press_machine, sets: 4}
+          - {exercise: standing_lateral_raise_machine, sets: 4}
+          - {exercise: face_pull, sets: 4}
+          - {exercise: biceps_machine, sets: 4}
+          - {exercise: horizontal_biceps_machine, sets: 4}
+          - {exercise: triceps_machine, sets: 4}
+      wed:
+        # Was "hinge + core" (RDL, hanging leg raise, lateral raise, chest supported row).
+        # Rebuilt as a LEG day on the gym80 machines. This is a deliberate reversal of a
+        # design constraint at the top of this file: quads were uncovered BY DESIGN because
+        # the cycling and running already load them. They are now trained here, so quads has
+        # come out of uncovered_by_design in config.yaml and is measured like any other
+        # muscle. Recovery, not gym time, is still the binding constraint.
+        # romanian_deadlift, lateral_raise and chest_supported_row all still appear on other
+        # days, so no muscle lost its only lift; hanging_leg_raise stays as the core slot.
+        name: legs (gym80)
+        plan:
+          - {exercise: leg_press_machine, sets: 4}
+          - {exercise: leg_extension_machine, sets: 4}
+          - {exercise: seated_leg_curl_machine, sets: 4}
+          - {exercise: hip_thrust_machine, sets: 4}
+          - {exercise: hip_abduction_machine, sets: 4}
+          - {exercise: hanging_leg_raise, sets: 4}
+      thu:
+        name: heavy pair
+        plan:
+          - {exercise: bench_press, sets: 4}
+          - {exercise: pullup, sets: 4}
+          - {exercise: triceps_pushdown, sets: 4}
+          - {exercise: barbell_curl, sets: 4}
+      fri:
+        name: shoulders
+        plan:
+          - {exercise: overhead_press, sets: 4}
+          - {exercise: lateral_raise, sets: 4}
+          - {exercise: face_pull, sets: 4}
+          - {exercise: hanging_leg_raise, sets: 4}
+      sat:
+        name: row + hinge
+        plan:
+          - {exercise: chest_supported_row, sets: 4}
+          - {exercise: romanian_deadlift, sets: 4}
+          - {exercise: barbell_curl, sets: 4}
+          - {exercise: triceps_pushdown, sets: 4}
+      sun:
+        name: full
+        plan:
+          - {exercise: bench_press, sets: 4}
+          - {exercise: pullup, sets: 4}
+          - {exercise: lateral_raise, sets: 4}
+          - {exercise: face_pull, sets: 4}
+
+schedule:
+  - {plan: gym80, from: 2026-09-07}

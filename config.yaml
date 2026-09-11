@@ -40,6 +40,19 @@ volume_targets:
 # trains them and the cycling does.
 uncovered_by_design: [calves]
 
+# Per-plan bands. `volume_targets` above is the default and covers every plan that has no
+# entry here - which is right while there is one plan, and wrong the moment there are two
+# that deliver different weekly volume: a travel week or a deload block judged against the
+# full block reads RED everywhere and means nothing.
+#
+# Derive, never guess, exactly as above:  python3 analyze.py bands --plan <id>
+# then paste the block it prints under this key.
+#
+# volume_targets_by_plan:
+#   travel:
+#     chest: {min: 8, target: 10, max: 12}
+#     ...
+
 progression:
   # Double progression. This is the ONLY source of load prescriptions.
   #   1. Any working set falls below rep_range floor at RIR 0

@@ -128,31 +128,148 @@ def load_exercises(path: str | None = None) -> dict:
     return lib
 
 
+EPOCH = dt.date(1970, 1, 1)
+
+
+def _plan_date(raw, where: str) -> dt.date:
+    if isinstance(raw, dt.date):
+        return raw
+    try:
+        return dt.date.fromisoformat(str(raw))
+    except ValueError:
+        raise LogError(f"routine.yaml: {where}: {raw!r} is not an ISO date") from None
+
+
+def _validate_plan(pid: str, plan: dict, lib: dict) -> None:
+    """A plan may not name a lift that does not exist, and may not declare a lift it
+    never schedules. `lifts` is optional - a plan that omits it gets the lifts it
+    actually schedules, in the order it first schedules them."""
+    scheduled: list[str] = []
+    for day in WEEKDAYS:
+        if day not in plan.get("week", {}):
+            raise LogError(f"routine.yaml: plan {pid!r} week is missing {day!r}")
+        entry = plan["week"][day] or {}
+        # A rest day is a legitimate day, and YAML reads an empty `plan:` as null. Both
+        # mean the same thing - nothing scheduled - so normalise rather than crash.
+        if not entry.get("plan"):
+            entry["plan"] = []
+        entry.setdefault("name", day)
+        plan["week"][day] = entry
+        for i, item in enumerate(entry["plan"], 1):
+            ex = item["exercise"]
+            if ex not in lib:
+                raise LogError(
+                    f"routine.yaml: plan {pid!r} {day} entry {i} names unknown exercise {ex!r}")
+            if not isinstance(item["sets"], int) or item["sets"] < 1:
+                raise LogError(f"routine.yaml: plan {pid!r} {day} {ex} sets must be a positive integer")
+            if ex not in scheduled:
+                scheduled.append(ex)
+    if "lifts" in plan:
+        declared, sch = set(plan["lifts"]), set(scheduled)
+        if sch - declared:
+            raise LogError(
+                f"routine.yaml: plan {pid!r} scheduled but not in lifts: {sorted(sch - declared)}")
+        if declared - sch:
+            raise LogError(
+                f"routine.yaml: plan {pid!r} in lifts but never scheduled: {sorted(declared - sch)}")
+    else:
+        plan["lifts"] = scheduled
+    plan.setdefault("name", pid)
+
+
 def load_routine(lib: dict, path: str | None = None) -> dict:
-    """The plan. Validated against the exercise library - a routine may not name a
-    lift that does not exist, and may not declare a lift it never schedules."""
+    """The plan, or plans. Validated against the exercise library.
+
+    A routine holds one or more weekly plans and a SCHEDULE saying which was active
+    from when. That schedule, not a column in log.csv, is how any date maps to the plan
+    that governed it - so switching plans never touches the log, and the history of what
+    was planned stays answerable for dates long past.
+
+    The single-plan shape this file started as - a top-level `week` and `lifts` - still
+    loads unchanged, as the one plan `default`. The returned dict carries `week` and
+    `lifts` for the plan active TODAY, so every caller that predates plans keeps working
+    and keeps meaning what it meant."""
     p = path or os.path.join(HERE, "routine.yaml")
     if not os.path.exists(p):
         raise LogError(f"{p}: no such file - the routine is what the log is measured against")
     with open(p) as fh:
         r = yaml.safe_load(fh)
-    scheduled: set[str] = set()
-    for day in WEEKDAYS:
-        if day not in r["week"]:
-            raise LogError(f"routine.yaml: week is missing '{day}'")
-        for i, item in enumerate(r["week"][day]["plan"], 1):
-            ex = item["exercise"]
-            if ex not in lib:
-                raise LogError(f"routine.yaml: {day} entry {i} names unknown exercise {ex!r}")
-            if not isinstance(item["sets"], int) or item["sets"] < 1:
-                raise LogError(f"routine.yaml: {day} {ex} sets must be a positive integer")
-            scheduled.add(ex)
-    declared = set(r["lifts"])
-    if scheduled - declared:
-        raise LogError(f"routine.yaml: scheduled but not in lifts: {sorted(scheduled - declared)}")
-    if declared - scheduled:
-        raise LogError(f"routine.yaml: in lifts but never scheduled: {sorted(declared - scheduled)}")
-    return r
+
+    if "plans" in r:
+        plans = r["plans"]
+        if not isinstance(plans, dict) or not plans:
+            raise LogError("routine.yaml: plans must be a non-empty map of id -> plan")
+        if "week" in r:
+            raise LogError("routine.yaml: a file with `plans` must not also have a "
+                           "top-level `week` - it is ambiguous which one is the plan")
+    else:
+        plans = {"default": {k: v for k, v in r.items() if k in ("name", "week", "lifts")}}
+        if "week" not in plans["default"]:
+            raise LogError("routine.yaml: needs either `plans` or a top-level `week`")
+
+    for pid, plan in plans.items():
+        _validate_plan(pid, plan, lib)
+
+    raw_sched = r.get("schedule") or [{"plan": next(iter(plans)), "from": EPOCH}]
+    if not isinstance(raw_sched, list) or not raw_sched:
+        raise LogError("routine.yaml: schedule must be a non-empty list")
+    sched = []
+    for i, e in enumerate(raw_sched, 1):
+        pid = e.get("plan")
+        if pid not in plans:
+            raise LogError(f"routine.yaml: schedule entry {i} names unknown plan {pid!r}")
+        sched.append({"plan": pid, "from": _plan_date(e.get("from"), f"schedule entry {i}")})
+    sched.sort(key=lambda e: e["from"])
+    froms = [e["from"] for e in sched]
+    if len(set(froms)) != len(froms):
+        raise LogError("routine.yaml: two schedule entries share a `from` date - which "
+                       "plan was active that day is then undecidable")
+
+    out = {"plans": plans, "schedule": sched}
+    out["active"] = plan_on(out, dt.date.today())
+    out["week"] = plans[out["active"]]["week"]
+    out["lifts"] = plans[out["active"]]["lifts"]
+    return out
+
+
+def plan_on(routine: dict, date: dt.date) -> str:
+    """Which plan governed a given date. Dates before the first entry belong to it too -
+    a log that predates the schedule is measured against the earliest plan rather than
+    against nothing."""
+    pid = routine["schedule"][0]["plan"]
+    for e in routine["schedule"]:
+        if e["from"] > date:
+            break
+        pid = e["plan"]
+    return pid
+
+
+def plan_of(routine: dict, pid: str | None) -> dict:
+    """One plan by id; the plan active today when asked for none."""
+    pid = pid or routine["active"]
+    if pid not in routine["plans"]:
+        raise LogError(f"no such plan {pid!r} - have {sorted(routine['plans'])}")
+    return routine["plans"][pid]
+
+
+def all_lifts(routine: dict) -> list[str]:
+    """Every lift any plan schedules, active or not. THE reason trends survive a plan
+    switch: a lift that left the active plan still has a history, and dropping it from
+    this list is what would make its trend disappear from the report the day you switch."""
+    out: list[str] = []
+    for pid in routine["plans"]:
+        for ex in routine["plans"][pid]["lifts"]:
+            if ex not in out:
+                out.append(ex)
+    return out
+
+
+def bands_for(cfg: dict, pid: str) -> dict:
+    """Volume bands for one plan. `volume_targets` is the default; a plan that delivers
+    different weekly volume overrides it in `volume_targets_by_plan`. Bands are DERIVED
+    from the plan they measure - `analyze.py bands --plan X` computes the block to paste,
+    so a new plan is never left being judged against another plan's targets."""
+    return (cfg.get("volume_targets_by_plan") or {}).get(pid) or cfg["volume_targets"]
 
 
 def _alias_map(lib: dict) -> dict[str, str]:
@@ -313,7 +430,15 @@ def flag(count: float, band: dict) -> str:
     return "GREEN"
 
 
-def volume_report(rows: list[Set], lib: dict, cfg: dict, days: int) -> dict:
+def volume_report(rows: list[Set], lib: dict, cfg: dict, days: int,
+                  routine: dict | None = None) -> dict:
+    """Hard sets per muscle against the band of the plan that governed the window.
+
+    The band belongs to the plan, not to the athlete: a deload block or a travel block
+    delivers different weekly volume by design, and judging it against the block you are
+    not running reads RED everywhere and means nothing. A window that STRADDLES a switch
+    is measured against the plan covering most of its days, and says so - rather than
+    silently picking one."""
     if not rows:
         return {"empty": True}
     end = max(s.date for s in rows)
@@ -321,19 +446,56 @@ def volume_report(rows: list[Set], lib: dict, cfg: dict, days: int) -> dict:
     counts = volume_by_muscle(win, lib, cfg)
     scale = days / 7
     uncovered = set(cfg.get("uncovered_by_design", []))
+
+    pid, straddles = None, []
+    if routine:
+        seen: dict[str, int] = {}
+        for i in range(days):
+            seen[plan_on(routine, end - dt.timedelta(days=i))] = \
+                seen.get(plan_on(routine, end - dt.timedelta(days=i)), 0) + 1
+        pid = max(seen, key=lambda k: (seen[k], k))
+        straddles = sorted(k for k in seen if k != pid)
+    bands = bands_for(cfg, pid) if pid else cfg["volume_targets"]
+
     out = []
     for m in MUSCLES:
-        band = {k: v * scale for k, v in cfg["volume_targets"][m].items()}
+        band = {k: v * scale for k, v in bands[m].items()}
         f = "UNCOVERED" if m in uncovered else flag(counts[m], band)
         out.append({"muscle": m, "sets": counts[m], "band": band, "flag": f,
                     "vs_target": counts[m] - band["target"]})
     return {"empty": False, "window": days, "end": end.isoformat(),
-            "sessions": len({s.date for s in win}), "sets": len(win), "muscles": out}
+            "sessions": len({s.date for s in win}), "sets": len(win), "muscles": out,
+            "plan": pid, "plan_name": plan_of(routine, pid)["name"] if routine else None,
+            "straddles": straddles}
 
 
 # --------------------------------------------------------------------------- #
 # the progression rule - the only source of load prescriptions
 # --------------------------------------------------------------------------- #
+
+def derive_bands(plan: dict, lib: dict, cfg: dict) -> dict:
+    """The weekly band a plan DELIVERS, per muscle, executed as written.
+
+    The bands in config.yaml are derived from the routine and never the other way round,
+    so adding a plan means deriving its bands - by hand until now. target is what the
+    plan actually schedules; min/max are the tolerance either side, wide enough that one
+    missed session is not RED and one extra is not either. A muscle the plan never trains
+    directly gets a zero band and belongs in `uncovered_by_design`, not in a deficit."""
+    tol = cfg.get("analysis", {}).get("band_tolerance", 0.15)
+    target = {m: 0 for m in MUSCLES}
+    for day in WEEKDAYS:
+        for p in plan["week"][day]["plan"]:
+            for m in lib[p["exercise"]]["muscles"]:
+                target[m] += p["sets"]
+    out = {}
+    for m in MUSCLES:
+        t = target[m]
+        out[m] = {"min": 0, "target": 0, "max": 5} if not t else {
+            "min": max(0, int(math.floor(t * (1 - tol)))),
+            "target": t,
+            "max": int(math.ceil(t * (1 + tol)))}
+    return out
+
 
 def round_down(kg: float, inc: float) -> float:
     return round(math.floor((kg + 1e-9) / inc) * inc, 4)
@@ -390,7 +552,11 @@ def today_plan(rows: list[Set], routine: dict, lib: dict, cfg: dict,
                date: dt.date) -> dict:
     """The routine's plan for one day, with a prescribed load per lift."""
     day = WEEKDAYS[date.weekday()]
-    entry = routine["week"][day]
+    # The plan that governed THAT date, not the one running now: asking what Tuesday
+    # three weeks ago was supposed to be must not be answered by today's block.
+    pid = plan_on(routine, date)
+    plan = plan_of(routine, pid)
+    entry = plan["week"][day]
     prior = [s for s in rows if s.date < date]
     items = []
     for p in entry["plan"]:
@@ -398,6 +564,7 @@ def today_plan(rows: list[Set], routine: dict, lib: dict, cfg: dict,
         done = [s for s in rows if s.date == date and s.exercise == p["exercise"]]
         items.append({**pr, "planned_sets": p["sets"], "logged_sets": len(done)})
     return {"date": date.isoformat(), "day": day, "name": entry["name"], "plan": items,
+            "plan_id": pid, "plan_name": plan["name"],
             "planned_sets": sum(p["sets"] for p in entry["plan"])}
 
 
@@ -753,12 +920,19 @@ def adherence(rows: list[Set], routine: dict, lib: dict, cfg: dict) -> dict:
     start = end - dt.timedelta(days=days - 1)
     thr = cfg["metrics"]["hard_set_rir"]
 
+    # Per DATE, not once for the window: a plan switch inside the window means the days
+    # either side of it were planned differently, and measuring the earlier ones against
+    # the plan that replaced them retroactively rewrites what was asked of you.
     planned: dict[str, int] = {}
     planned_days = 0
+    plans_seen: list[str] = []
     d = start
     while d <= end:
         planned_days += 1
-        for p in routine["week"][WEEKDAYS[d.weekday()]]["plan"]:
+        pid = plan_on(routine, d)
+        if pid not in plans_seen:
+            plans_seen.append(pid)
+        for p in plan_of(routine, pid)["week"][WEEKDAYS[d.weekday()]]["plan"]:
             planned[p["exercise"]] = planned.get(p["exercise"], 0) + p["sets"]
         d += dt.timedelta(days=1)
 
@@ -774,6 +948,8 @@ def adherence(rows: list[Set], routine: dict, lib: dict, cfg: dict) -> dict:
     tp, tl = sum(planned.values()), sum(logged.values())
     trained = len({s.date for s in rows if start <= s.date <= end})
     return {"empty": False, "window": days, "end": end.isoformat(),
+            "plans": plans_seen,
+            "plan_names": [plan_of(routine, p)["name"] for p in plans_seen],
             "planned_sets": tp, "logged_sets": tl,
             "rate": round(tl / tp, 3) if tp else None,
             "planned_days": planned_days, "trained_days": trained,
@@ -943,19 +1119,64 @@ def print_adherence(a: dict) -> None:
 # json export - the web app renders these numbers, it does not recompute them
 # --------------------------------------------------------------------------- #
 
+def print_plans(routine: dict, rows: list[Set]) -> None:
+    print("PLANS")
+    last = max((s.date for s in rows), default=None)
+    starts = {e["plan"]: e["from"] for e in routine["schedule"]}
+    for pid, p in routine["plans"].items():
+        sets = sum(x["sets"] for d in WEEKDAYS for x in p["week"][d]["plan"])
+        live = " <- active" if pid == routine["active"] else ""
+        since = starts.get(pid)
+        print(f"  {pid:<14} {p['name'][:30]:<30} {len(p['lifts']):>3} lifts "
+              f"{sets:>4} sets/wk"
+              f"{'  from ' + since.isoformat() if since and since != EPOCH else '':<17}{live}")
+    if len(routine["schedule"]) > 1:
+        print("  schedule: " + " -> ".join(
+            f"{e['plan']}@{e['from'].isoformat()}" for e in routine["schedule"]))
+    if last:
+        print(f"  plan governing the last logged day ({last}): {plan_on(routine, last)}")
+    print("  Trends, index, bridge, stalls and balance read log.csv alone and are "
+          "unaffected by which plan is active.")
+
+
+def print_bands(pid: str, bands: dict) -> None:
+    print(f"# volume_targets derived from plan {pid!r} - paste under "
+          f"volume_targets_by_plan in config.yaml")
+    print(f"  {pid}:")
+    for m in MUSCLES:
+        b = bands[m]
+        print(f"    {m + ':':<14}{{min: {b['min']}, target: {b['target']}, max: {b['max']}}}")
+
+
 def analytics_json(rows, routine, lib, cfg) -> dict:
     today = max(s.date for s in rows) if rows else dt.date.today()
+    # EVERY plan's lifts, plus anything the log holds that no plan schedules any more.
+    # Trends belong to the lift, not to the plan that happened to schedule it: indexing
+    # these off the active plan is what would make a lift's history vanish from the
+    # report the day you switch blocks, which is the one thing plans must not do.
+    lifts = all_lifts(routine)
+    for s_ in rows:
+        if s_.exercise not in lifts:
+            lifts.append(s_.exercise)
     return {
         "generated_from": "analyze.py",
         "last_logged": today.isoformat(),
-        "volume": {str(d): volume_report(rows, lib, cfg, d) for d in cfg["metrics"]["windows"]},
-        "progression": {e: exercise_progression(rows, e, lib, cfg) for e in routine["lifts"]},
+        "volume": {str(d): volume_report(rows, lib, cfg, d, routine)
+                   for d in cfg["metrics"]["windows"]},
+        "progression": {e: exercise_progression(rows, e, lib, cfg) for e in lifts},
         "index": strength_index(rows, lib, cfg),
         "bridge": volume_load_bridge(rows, lib, cfg),
         "stalls": detect_stalls(rows, lib, cfg),
         "balance": balance_ratios(rows, lib, cfg),
         "adherence": adherence(rows, routine, lib, cfg),
-        "prescriptions": {e: prescribe(rows, e, lib, cfg) for e in routine["lifts"]},
+        "prescriptions": {e: prescribe(rows, e, lib, cfg) for e in lifts},
+        "active_plan": routine["active"],
+        "plans": {pid: {"name": p["name"],
+                        "week": {d: {"name": p["week"][d]["name"], "plan": p["week"][d]["plan"]}
+                                 for d in WEEKDAYS}}
+                  for pid, p in routine["plans"].items()},
+        "schedule": [{"plan": e["plan"], "from": e["from"].isoformat()}
+                     for e in routine["schedule"]],
         "week": {d: {"name": routine["week"][d]["name"], "plan": routine["week"][d]["plan"]}
                  for d in WEEKDAYS},
         "sessions": sorted({s.date.isoformat() for s in rows}),
@@ -967,7 +1188,8 @@ def analytics_json(rows, routine, lib, cfg) -> dict:
 # --------------------------------------------------------------------------- #
 
 COMMANDS = ["validate", "volume", "today", "prescribe", "progression", "index",
-            "bridge", "stalls", "balance", "adherence", "report", "json"]
+            "bridge", "stalls", "balance", "adherence", "report", "json",
+            "plans", "bands"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -978,6 +1200,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--window", type=int, default=7)
     ap.add_argument("--exercise", default=None)
     ap.add_argument("--date", default=None)
+    ap.add_argument("--plan", default=None,
+                    help="which weekly plan to act on; default is the one active today")
     ap.add_argument("--out", default=os.path.join(HERE, "web", "analytics.json"))
     args = ap.parse_args(argv)
 
@@ -1002,12 +1226,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "validate":
+            np = len(routine["plans"])
             print(f"OK: {args.log} - {len(rows)} working sets, "
                   f"{len({s.date for s in rows})} sessions, "
                   f"{len({s.exercise for s in rows})} exercises; routine.yaml OK "
-                  f"({len(routine['lifts'])} lifts)")
+                  f"({np} plan{'' if np == 1 else 's'}, {len(all_lifts(routine))} lifts, "
+                  f"active {routine['active']!r} with {len(routine['lifts'])})")
         elif args.command == "volume":
-            print_volume(volume_report(rows, lib, cfg, args.window))
+            print_volume(volume_report(rows, lib, cfg, args.window, routine))
         elif args.command == "today":
             date = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
             print_today(today_plan(rows, routine, lib, cfg, date), lib)
@@ -1035,12 +1261,18 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "adherence":
             print_adherence(adherence(rows, routine, lib, cfg))
         elif args.command == "report":
-            print_volume(volume_report(rows, lib, cfg, 7)); print()
+            print_plans(routine, rows); print()
+            print_volume(volume_report(rows, lib, cfg, 7, routine)); print()
             print_adherence(adherence(rows, routine, lib, cfg)); print()
             print_index(strength_index(rows, lib, cfg)); print()
             print_bridge(volume_load_bridge(rows, lib, cfg)); print()
             print_stalls(detect_stalls(rows, lib, cfg)); print()
             print_balance(balance_ratios(rows, lib, cfg))
+        elif args.command == "plans":
+            print_plans(routine, rows)
+        elif args.command == "bands":
+            pid = args.plan or routine["active"]
+            print_bands(pid, derive_bands(plan_of(routine, pid), lib, cfg))
         elif args.command == "json":
             blob = analytics_json(rows, routine, lib, cfg)
             os.makedirs(os.path.dirname(args.out), exist_ok=True)
