@@ -273,6 +273,19 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   falls out, a lift the file adds lands at the end at its file set count. A set count
   equal to the file's is not an override and is discarded, so it cannot silently shadow
   a later change.
+- **Reordering has TWO paths through one control, and the drag is the unreliable one.**
+  The row handle is both a drag handle and a tap target: dragging it moves the row, and
+  tapping it picks the row up so that a tap on another row's handle in the same day drops
+  it there. Tap-to-move exists because a drag asks the browser for a stream of move
+  events for a touch it is equally free to call a scroll - when it declines, the drop
+  reverts with no error anywhere, which is how this was reported as "it jumps back".
+  So: no pointer capture, move/up listeners on `window` and not the row, a `touchmove`
+  fallback for browsers that deliver touch but not pointer events, scrolling suspended
+  on `<html>` for the duration, `pointercancel` treated as a DROP rather than an abort,
+  and a plain `click` as the last resort. Every reorder echoes the day, the new position
+  and whether Today is showing that day - "it did nothing" and "it changed a day you are
+  not looking at" look identical otherwise, and that ambiguity is what got this reported
+  twice.
 - **A set count still has to be EXPORTED**, because it changes a muscle's weekly volume
   and `config.yaml`'s bands are DERIVED from that: until it reaches `routine.yaml` the
   bands are measuring a plan that is not the one on screen. The Plan tab counts the

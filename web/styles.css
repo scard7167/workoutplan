@@ -297,14 +297,24 @@ h1 { margin: 0; font: 800 27px/1.05 var(--display); letter-spacing: -.015em; tex
 .dayrow:first-of-type { border-top: 0; }
 .dayrow.dragging {
   z-index: 5; box-shadow: 0 8px 24px rgba(0,0,0,.45); border-radius: 8px; touch-action: none;
+  -webkit-user-select: none; user-select: none;
 }
+/* Tap-to-move: the row the handle is holding, and the handles that will take it. */
+.dayrow.picked { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 8px; }
 .dayrow:not(.dragging) { transition: transform 150ms ease; }
 .handle {
   flex: none; width: 24px; height: 44px; border: 0; background: none; color: var(--muted);
   cursor: grab; touch-action: none; font: 400 15px/1 var(--sans); letter-spacing: -2px;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   display: flex; align-items: center; justify-content: center;
 }
 .handle:active { cursor: grabbing; color: var(--ink); }
+.handle.held { color: var(--accent); }
+.handle.drop {
+  width: 34px; color: var(--accent); border: 1px dashed var(--accent-d); border-radius: 6px;
+  letter-spacing: 0; font-size: 17px;
+}
 .dayrow select {
   background: var(--panel-2); color: var(--ink); border: 1px solid var(--line-2); border-radius: 6px;
   padding: 7px 8px; font: 400 13px var(--sans); max-width: 100%; min-width: 0;

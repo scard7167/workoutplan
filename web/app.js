@@ -49,6 +49,7 @@ const state = {
   setsBy: {},        // per-day, per-lift SET COUNT overrides - same ownership as order
   orderAt: null,     // when this device last changed either of them
   orderDirty: false, // changed but not yet in the store
+  pick: null,            // the row tap-to-move has picked up, if any
   dropped: 0,        // set-count edits discarded because a newer plan shipped
   queue: [],         // dates written here but not yet in the store
   sync: "off",       // off | idle | pending | error
@@ -1162,9 +1163,18 @@ function renderPlan() {
     // entry the handler has to change.
     const rows = shown.map((p) => {
       const prov = isProvisional(p.exercise), bad = !exReady(p.exercise);
+      // The handle is both a drag handle and a tap target, so it has three states: idle,
+      // holding this row, and "drop the held row here". Saying which is which in the
+      // glyph and the label is the whole of the tap-to-move affordance.
+      const held = state.pick && state.pick.day === d && state.pick.ex === p.exercise;
+      const dropTo = state.pick && state.pick.day === d && !held;
       return `
-      <div class="dayrow ${bad ? "unset" : ""}" data-day="${d}" data-ex="${p.exercise}">
-        <button class="handle" data-role="handle" aria-label="drag to reorder">&#8942;&#8942;</button>
+      <div class="dayrow ${bad ? "unset" : ""} ${held ? "picked" : ""}"
+           data-day="${d}" data-ex="${p.exercise}">
+        <button class="handle ${held ? "held" : ""} ${dropTo ? "drop" : ""}"
+          data-role="handle" aria-label="${held ? "cancel move"
+            : dropTo ? `move ${label(state.pick.ex)} here` : "reorder"}">${
+          dropTo ? "&#8677;" : "&#8942;&#8942;"}</button>
         <input class="exin" data-role="ex" list="exlist" value="${label(p.exercise)}"
                title="${label(p.exercise)}" autocomplete="off" autocapitalize="none"
                spellcheck="false" aria-label="exercise name">
@@ -1255,7 +1265,16 @@ function renderPlan() {
       }
       saveRoutine(); renderPlan();
     };
-    row.querySelector('[data-role="handle"]').addEventListener("pointerdown", (e) => startDrag(e, row, d));
+    const handle = row.querySelector('[data-role="handle"]');
+    handle.addEventListener("pointerdown", (e) => startDrag(e, row, d));
+    // Last resort. If a browser never delivers the pointerdown at all, or delivers it
+    // and then neither a pointerup nor a touchend, the click still lands - so the
+    // tap-to-move path survives even a total pointer-event failure. Suppressed right
+    // after a gesture the pointer path already handled, so one tap is never two.
+    handle.addEventListener("click", () => {
+      if (Date.now() - gestureAt < 500) return;
+      pickToggle(d, ex);
+    });
   }
   for (const btn of $("planweek").querySelectorAll('[data-role="add"]')) {
     btn.onclick = () => {
@@ -1316,22 +1335,82 @@ function wireDefPanel(def) {
 // Pointer-based reorder - not the HTML5 drag-and-drop API, which has no real touch
 // support and this has to work with a thumb, mid-session. Rows in the SAME day only;
 // reordering across days is a different edit (move + remove) and out of scope here.
+const DRAG_SLOP = 8;          // px of travel before a touch counts as a drag, not a tap
+let gestureAt = 0;            // when the pointer path last handled a handle gesture
+
+// Writes the ORDER, never the routine: a reorder must not mark the plan as structurally
+// edited, because it changes no volume and needs no export - and making it structural is
+// what would get it thrown away on the next deploy. It echoes the result, and says
+// whether Today is showing that day, because "it did nothing" and "it changed a day you
+// are not looking at" are indistinguishable on screen otherwise.
+function commitOrder(day, fromIndex, toIndex) {
+  const names = effectivePlan(day).map(p => p.exercise);
+  if (fromIndex < 0 || fromIndex >= names.length) { renderPlan(); return false; }
+  const to = clamp(toIndex, 0, names.length - 1);
+  if (to === fromIndex) { renderPlan(); return false; }
+  const [moved] = names.splice(fromIndex, 1);
+  names.splice(to, 0, moved);
+  state.order[day] = names;
+  state.pick = null;
+  saveOrder();
+  renderPlan();
+  planEcho(
+    `<b>${day} ${label(moved)} &rarr; #${to + 1} of ${names.length}.</b> ` +
+    (day === todayKey()
+      ? `Showing in Today now.`
+      : `Today is showing <b>${todayKey()}</b>, so this changes that tab when ` +
+        `${day} comes round.`));
+  return true;
+}
+
+// Tap-to-move: a reorder path with no gesture in it at all. A drag asks the browser to
+// deliver a stream of moves for a touch it is equally free to call a scroll, and when it
+// does not, the drop reverts - which is exactly how this was reported ("it jumps back").
+// A tap cannot fail that way, so the handle does both: tap to pick a row up, tap another
+// row's handle to drop it there, tap the same one again to cancel.
+function pickToggle(day, ex) {
+  const cur = state.pick;
+  if (cur && cur.day === day && cur.ex === ex) {
+    state.pick = null; renderPlan(); return;
+  }
+  if (cur && cur.day === day) {                 // second tap in the same day: the drop
+    const names = effectivePlan(day).map(p => p.exercise);
+    const from = names.indexOf(cur.ex), to = names.indexOf(ex);
+    state.pick = null;
+    if (from < 0 || to < 0) { renderPlan(); return; }
+    commitOrder(day, from, to);
+    return;
+  }
+  state.pick = { day, ex };                     // a pick in another day replaces it
+  renderPlan();
+  planEcho(`<b>${label(ex)} picked up (${day}).</b> Tap another row's handle to drop it ` +
+           `there, or tap this row's handle again to cancel.`);
+}
+
 function startDrag(e, row, day) {
-  e.preventDefault();
+  // Pointer capture is deliberately NOT used and the move/up listeners go on the window,
+  // not the row. With capture, a browser that retargets or simply stops delivering
+  // pointer events part way through a touch never gets a pointermove to the row, so the
+  // drop position stays where it started and the row snaps back with no error anywhere.
+  // Window listeners see whatever the browser does deliver, and a touchmove fallback
+  // covers the case where it delivers touch events but not pointer ones.
   const list = [...row.parentElement.querySelectorAll(".dayrow")];
   const fromIndex = list.indexOf(row);
   const h = row.getBoundingClientRect().height;
-  let current = fromIndex;
   const startY = e.clientY;
+  let current = fromIndex, dragging = false;
 
-  row.setPointerCapture(e.pointerId);
-  row.classList.add("dragging");
+  // Scrolling is suspended outright for the duration rather than trusted to
+  // touch-action, so the browser has no reason left to claim the gesture mid-drag.
+  const root = document.documentElement;
+  const ta = root.style.touchAction, us = root.style.userSelect;
+  root.style.touchAction = "none"; root.style.userSelect = "none";
 
-  // Recomputed from each row's FIXED original index against fromIndex/current on every
-  // change, not patched incrementally - an incremental patch loses track of rows that
-  // move back out of the affected range when the drag reverses direction mid-gesture.
-  function onMove(ev) {
-    const dy = ev.clientY - startY;
+  const track = (y) => {
+    const dy = y - startY;
+    if (!dragging && Math.abs(dy) <= DRAG_SLOP) return;
+    dragging = true;
+    row.classList.add("dragging");
     row.style.transform = `translateY(${dy}px)`;
     const slot = clamp(Math.round(fromIndex + dy / h), 0, list.length - 1);
     if (slot === current) return;
@@ -1342,27 +1421,45 @@ function startDrag(e, row, day) {
         : (current < fromIndex && idx < fromIndex && idx >= current) ? 1 : 0;
       el.style.transform = shift ? `translateY(${shift * h}px)` : "";
     });
-  }
-  function onUp() {
-    row.releasePointerCapture(e.pointerId);
-    row.removeEventListener("pointermove", onMove);
-    row.removeEventListener("pointerup", onUp);
-    row.removeEventListener("pointercancel", onUp);
-    if (current !== fromIndex) {
-      // Writes the ORDER, never the routine: a reorder must not mark the plan as
-      // structurally edited, because it changes no volume and needs no export - and
-      // making it structural is what would get it thrown away on the next deploy.
-      const names = effectivePlan(day).map(p => p.exercise);
-      const [moved] = names.splice(fromIndex, 1);
-      names.splice(current, 0, moved);
-      state.order[day] = names;
-      saveOrder();
+  };
+  const onPointerMove = (ev) => track(ev.clientY);
+  const onTouchMove = (ev) => {
+    if (!ev.touches.length) return;
+    if (ev.cancelable) ev.preventDefault();     // non-passive: the page stays put
+    track(ev.touches[0].clientY);
+  };
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    gestureAt = Date.now();
+    detach();
+    root.style.touchAction = ta; root.style.userSelect = us;
+    // A cancel is a drop, not an abort. Scrolling is already suspended, so the cancels
+    // left are the browser losing the pointer - and discarding the move there is the
+    // snap-back itself. A gesture that never passed the slop is a tap: hand it to
+    // pickToggle rather than swallowing it.
+    if (dragging) {
+      if (current !== fromIndex) commitOrder(day, fromIndex, current); else renderPlan();
+    } else {
+      pickToggle(day, row.dataset.ex);
     }
-    renderPlan();
+  };
+  const tOpts = { passive: false, capture: true };
+  function detach() {
+    window.removeEventListener("pointermove", onPointerMove, true);
+    window.removeEventListener("pointerup", finish, true);
+    window.removeEventListener("pointercancel", finish, true);
+    window.removeEventListener("touchmove", onTouchMove, tOpts);
+    window.removeEventListener("touchend", finish, true);
+    window.removeEventListener("touchcancel", finish, true);
   }
-  row.addEventListener("pointermove", onMove);
-  row.addEventListener("pointerup", onUp);
-  row.addEventListener("pointercancel", onUp);
+  window.addEventListener("pointermove", onPointerMove, true);
+  window.addEventListener("pointerup", finish, true);
+  window.addEventListener("pointercancel", finish, true);
+  window.addEventListener("touchmove", onTouchMove, tOpts);
+  window.addEventListener("touchend", finish, true);
+  window.addEventListener("touchcancel", finish, true);
 }
 
 // How far the local plan has drifted from the file, counted in the units that matter:
@@ -2028,6 +2125,9 @@ function selectTab(name) {
     $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
     $(`p-${t}`).hidden = t !== name;
   }
+  // A row left picked up on a tab you walked away from is a held gesture with its
+  // instruction scrolled out of sight. Drop it.
+  if (state.pick) { state.pick = null; renderPlan(); }
 }
 for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
 
