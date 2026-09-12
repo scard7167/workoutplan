@@ -149,6 +149,39 @@ sessions in the last 7 days, the two biggest volume gaps, suggested focus. Then 
 Never open a new session while `current_session.md` exists - ask whether to commit
 (`/end`) or discard it.
 
+### Logging in the web app - the focused set
+
+**2026-09-12, from the UX review: Today is a focus view, not a list.** It is used
+one-handed with a barbell nearby, so exactly one set is in play. The card carries the
+prescription as the hero, last session's same-numbered set beneath it, three steppers
+(weight / reps / RIR) for the days you deviate, and ONE bottom-anchored 52px action that
+logs the set, starts the rest timer and advances to the next slot. The rest of the day
+collapses to one tappable line each; `swap exercise` jumps to the next lift and is not
+optional - a single-exercise view is worse than a flat list the moment a machine is taken.
+
+**RIR IS NOW ENTERED, and that is a rule change.** The app logged a blank RIR by design,
+which meant nothing typed on the phone could ever move a prescription: rule 2 needs
+RIR <= 2 and rule 1 needs RIR 0. It still DEFAULTS to blank, because unverified is not
+proven - but the card states the consequence (`RIR blank -> the load will hold`) rather
+than leaving it to be discovered. The RIR stepper cycles blank -> 0 -> 1 -> 2 -> 3 -> 4 ->
+blank: blank is a value here, not an absence to skip past.
+
+A day with logged sets is still HISTORY and still renders the flat read-only list - a
+record is not an entry form.
+
+**The flat list is COLLAPSED, never removed** (`full session`). Two things only it can do,
+and hiding it outright broke both: correcting an arbitrary slot, and the set-count stepper
+that Today shares with Plan - "set counts are changed from EITHER tab" is a documented
+invariant and the first version of this change silently violated it. It captures a weight
+only, so reps fall back to the target and RIR stays blank there.
+
+`state.focus`, `state.rest` and `state.showFull` are all persisted with the session, and
+the toggle SAVES on click - a reload that re-collapses the list loses the place you were
+at, which is exactly what the tests caught.
+
+The rest timer belongs to the SESSION, not the page: it is persisted with the sets, so
+locking the phone between sets does not reset it.
+
 ### Logging - every message during a session is a set
 Exercise is **sticky**: once named, every following message belongs to it until a new
 exercise is named or `swap to X` is used.
@@ -389,6 +422,29 @@ devices like the order does.
   `schedule` entry for the selected one. The export also reminds you to derive the new
   plan's bands, because nothing else will.
 
+### What Trends leads with
+
+**Sets per muscle against the band is the first card**, because it is the question the
+screen exists to answer. It used to sit BELOW a 29-row per-lift ledger, which put the
+primary requirement under a list that says nothing until weeks of data exist.
+
+- the **missed-muscle callout** sits above the bars and names the exception in words. A
+  red bar says a muscle is low; the callout says which, by how much, and - the actionable
+  half - whether the plan even covers it. `no day in the plan trains it` and `the plan
+  schedules N/wk, the sessions have not happened` need different fixes, so they are
+  worded apart. `uncovered_by_design` muscles are excluded: calves are a decision, not a
+  deficit.
+- **stalls are capped at three rows** with a count of the rest. Exception reporting, not
+  a ledger.
+- the **per-lift ledger is collapsed** behind `all N lifts`. Demoted, never deleted.
+- the **KPI row is not rendered at all** until a session exists. Three derived aggregates
+  saying "nothing logged yet" in the best position on the page is worse than nothing.
+
+Bands stay per-muscle and DERIVED from the routine. The review proposed a flat 10-20
+shaded band for every muscle; that would be wrong here and is not what was built -
+hamstrings target 4 and lats 24 in the current plan, and a flat band would call both
+wrong.
+
 ### Provisional exercises
 
 The Plan tab's exercise field takes free text, and the photo dump proposes machines from
@@ -440,6 +496,14 @@ now quads are trained directly.
   stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
   lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
   of Trends because a plan changed is a bug, not a filter.
+- **A focus view must never be the ONLY way in.** Today shows one set at a time, but the
+  full flat list stays one tap away: a single-exercise view is worse than a list the
+  moment a machine is taken, and the set-count stepper Today shares with Plan lives in
+  that list. Removing the fallback is how that invariant got broken once already.
+- **`[hidden]` needs an explicit rule in `styles.css`.** The published Artifact's wrapper
+  supplies `[hidden]{display:none!important}`; a local copy of the page does not, so a
+  `display:flex` element ignores the attribute entirely. A local test passes while the
+  bundle differs, or worse, the other way round.
 - **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
   will pass a module-level syntax error that stops the whole page loading. Use
   `node --input-type=module --check < web/app.js`, and load the page in a browser and

@@ -504,3 +504,148 @@ button.primary, .actions button {
   font: 400 13px var(--sans);
 }
 .planrenamewrap input:focus { border-color: var(--accent); outline: none; }
+
+/* =========================================================== focus mode
+   Today is used one-handed with a barbell nearby. One set is in play; the prescription
+   is the hero, last session sits under it, the steppers are for the days you deviate,
+   and the only primary action is anchored in the thumb arc at the bottom. */
+
+/* Rest timer. It sits above the card because it is read between sets, not during one. */
+.restbar {
+  display: flex; align-items: baseline; gap: 9px; margin: 0 0 12px;
+  padding: 10px 13px; border-radius: var(--r);
+  background: var(--panel); border: 1px solid var(--line);
+}
+.restbar.ready { border-color: var(--accent); background: rgba(127,209,232,.07); }
+.restlab { font: 500 10px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase;
+  color: var(--muted); }
+.restval { font: 600 22px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.restbar.ready .restval { color: var(--accent); }
+.resttarget { font: 400 11px/1 var(--mono); color: var(--muted); }
+.restskip {
+  margin-left: auto; min-height: 44px; padding: 0 12px; cursor: pointer;
+  background: none; border: 1px solid var(--line-2); border-radius: 7px;
+  color: var(--ink-2); font: 500 12px var(--sans); touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fcard { border: 1px solid var(--line); border-radius: var(--r); background: var(--panel);
+  padding: 15px; }
+.fcard.unset { border-color: var(--crit); }
+.fhead { display: flex; align-items: center; gap: 11px; }
+.fthumb { width: 48px; height: 48px; flex: none; }
+.fname { min-width: 0; }
+.fn { display: block; font: 500 17px/1.2 var(--sans); }
+.fset { display: block; font: 400 11px/1.3 var(--mono); color: var(--muted); margin-top: 3px;
+  letter-spacing: .04em; }
+
+/* The hero. Legible at arm's length - this is the number you act on. */
+.fhero { display: flex; align-items: baseline; gap: 5px; margin: 16px 0 6px; flex-wrap: wrap; }
+.fw { font: 700 40px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.fu { font: 500 14px/1 var(--sans); color: var(--muted); }
+.fx { font: 400 22px/1 var(--sans); color: var(--muted); margin: 0 3px; }
+.fr { font: 700 32px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.frir { font: 600 18px/1 var(--mono); color: var(--accent); margin-left: 5px; }
+.frirnone { font: 400 11px/1 var(--mono); color: var(--muted); margin-left: 7px; }
+
+/* Last session. Promoted out of the dimmest text on the card - it is the number
+   actually reasoned about between sets. */
+.flast { font: 500 13px/1.4 var(--mono); color: var(--ink-2); }
+
+.fsteps { display: flex; gap: 7px; margin: 15px 0 0; }
+.fstepgrp { flex: 1; display: flex; align-items: center; justify-content: space-between;
+  gap: 2px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 9px;
+  padding: 3px; }
+.fsl { font: 500 9.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--muted); }
+.fstep {
+  width: 40px; height: 44px; flex: none; border: 0; border-radius: 7px;
+  background: none; color: var(--ink); font: 500 19px/1 var(--sans); cursor: pointer;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.fstep:active { background: var(--accent); color: #0B1417; }
+.fnote { margin: 13px 0 0; font: 400 11.5px/1.55 var(--sans); color: var(--muted); }
+.fnote b { color: var(--warn); font-weight: 500; }
+.fnote.crit { color: var(--crit); }
+
+/* Sets already logged for this lift. Tapping one loads it back for correction. */
+.fdone { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 13px; }
+.fchip {
+  min-height: 44px; padding: 5px 9px; cursor: pointer; border-radius: 8px;
+  background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted);
+  font: 500 10px/1.3 var(--mono); display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2px;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.fchip span { font: 600 13px/1 var(--mono); color: var(--ink); font-variant-numeric: tabular-nums; }
+.fchip.on { border-color: var(--accent); background: rgba(127,209,232,.08); }
+
+/* Not optional: a single-exercise view is worse than a flat list the moment a machine is
+   taken, and this is what makes the pattern safe. */
+.fswap {
+  display: block; width: 100%; min-height: 44px; margin-top: 13px; cursor: pointer;
+  background: none; border: 1px dashed var(--line-2); border-radius: 8px;
+  color: var(--ink-2); font: 400 12px var(--sans); touch-action: manipulation;
+}
+
+.uplab { font: 500 10px/1 var(--sans); letter-spacing: .16em; text-transform: uppercase;
+  color: var(--muted); margin: 20px 0 8px; }
+.uplist { display: flex; flex-direction: column; gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.uprow {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 48px; padding: 10px 13px; cursor: pointer; text-align: left;
+  background: var(--panel); border: 0; touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.uprow:active { background: var(--panel-2); }
+.uprow.done { opacity: .5; }
+.un { font: 400 14px/1.25 var(--sans); color: var(--ink); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us { font: 400 11px/1 var(--mono); color: var(--muted); flex: none; }
+
+/* 52pt target, bottom-anchored and fixed: reachable without scrolling whatever the
+   session length. The page reserves room for it so nothing ends up underneath. */
+.logbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: linear-gradient(to top, var(--ground) 62%, rgba(15,17,19,0));
+  pointer-events: none;
+}
+.logbar[hidden] { display: none; }
+.logbtn {
+  pointer-events: auto; display: block; width: 100%; max-width: 588px; margin: 0 auto;
+  height: 52px; border-radius: 12px; cursor: pointer;
+  background: var(--accent); border: 0; color: #0B1417;
+  font: 600 17px/1 var(--sans); letter-spacing: .01em;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+}
+.logbtn:active { filter: brightness(.92); }
+body.haslogbar main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+
+/* ------------------------------------------------- trends: the exception line */
+.callout { margin: 0 0 8px; padding: 10px 12px; border-radius: 8px;
+  font: 400 12.5px/1.5 var(--sans); border: 1px solid var(--line-2); color: var(--ink-2); }
+.callout:last-child { margin-bottom: 13px; }
+.callout b { color: var(--ink); font-weight: 500; }
+.callout.crit { border-color: var(--crit); background: rgba(217,82,74,.08); }
+.callout.warn { border-color: var(--warn); background: rgba(224,163,46,.07); }
+.callout.ok { border-color: var(--accent-d); background: rgba(127,209,232,.05); }
+.callout.flat { color: var(--muted); }
+
+.disclose {
+  display: block; width: 100%; min-height: 44px; cursor: pointer;
+  background: none; border: 1px dashed var(--line-2); border-radius: 8px;
+  color: var(--ink-2); font: 400 12px var(--sans); touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.disclose:active { color: var(--ink); border-color: var(--accent); }
+.liftgrid[hidden], .detail[hidden] { display: none; }
+
+/* The artifact wrapper supplies [hidden]{display:none!important}; a local copy of the
+   page does not, so a display: flex/grid element ignored `hidden` entirely - which is
+   how the flat list stayed visible underneath the focus card. Stated here so both
+   copies behave the same. */
+[hidden] { display: none !important; }
+.logbtn.dim { background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted);
+  cursor: not-allowed; font-weight: 500; font-size: 14px; }

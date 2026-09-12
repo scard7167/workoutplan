@@ -38,6 +38,18 @@
         <div class="progress" id="today-progress"></div>
       </div>
 
+      <!-- Rest timer. The phone comes out between sets anyway; this is what it is for. -->
+      <div class="restbar" id="restbar" hidden></div>
+
+      <!-- The focused set. One exercise at a time on an editable day, so nothing needs
+           scrolling mid-session. History days fall back to the flat list below. -->
+      <div id="focuscard"></div>
+      <div id="upnext"></div>
+
+      <!-- The full session, collapsed. The review said focus one exercise and COLLAPSE
+           the rest, not delete it: this is where an arbitrary slot is corrected and
+           where the set-count stepper lives, which Today and Plan share. -->
+      <button class="disclose" id="btn-full" aria-expanded="false" hidden></button>
       <ol class="plan" id="today-plan"></ol>
 
       <div class="feedback" id="feedback" aria-live="polite"></div>
@@ -60,15 +72,33 @@
         <code>analyze.py</code>, so those only move once the sessions reach
         <code>log.csv</code> and it runs again. Nothing here writes to
         <code>log.csv</code> directly. Loads come from the double-progression rule in
-        <code>config.yaml</code>, never from anywhere else. Weight only - reps are always
-        the target shown, RIR always blank, so a deload can't trigger from what's logged
-        here.
+        <code>config.yaml</code>, never from anywhere else. Weight, reps AND RIR are
+        logged: the rule needs RIR &le; 2 to add load and RIR 0 to deload, so leaving RIR
+        blank means the load holds however the set went. Blank is still allowed - it is
+        recorded as unverified, and unverified is never treated as proven.
       </p>
     </section>
 
     <!-- ----------------------------------------------------------- TRENDS -->
     <section class="panel" id="p-trends" role="tabpanel" aria-labelledby="tab-trends" hidden>
       <div class="note" id="localnote" hidden></div>
+
+      <!-- THE question this screen exists to answer: sets per muscle against the band,
+           and which muscles fall outside it. It was below the per-lift grid, which meant
+           the primary requirement sat under a 29-row ledger. -->
+      <section class="card">
+        <div class="cardhead">
+          <h2>Sets per muscle</h2>
+          <div class="seg" id="volseg">
+            <button data-w="7" aria-pressed="true">7d</button>
+            <button data-w="14" aria-pressed="false">14d</button>
+          </div>
+        </div>
+        <div id="missed"></div>
+        <div id="meters"></div>
+        <p class="legend" id="vol-legend"></p>
+      </section>
+
       <div class="kpis" id="kpis"></div>
 
       <section class="card">
@@ -76,20 +106,9 @@
           <h2>Per-lift trend</h2>
           <span class="meta" id="trend-meta"></span>
         </div>
-        <div class="liftgrid" id="liftgrid"></div>
+        <button class="disclose" id="btn-lifts" aria-expanded="false"></button>
+        <div class="liftgrid" id="liftgrid" hidden></div>
         <div class="detail" id="liftdetail"></div>
-      </section>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Hard sets vs band</h2>
-          <div class="seg" id="volseg">
-            <button data-w="7" aria-pressed="true">7d</button>
-            <button data-w="14" aria-pressed="false">14d</button>
-          </div>
-        </div>
-        <div id="meters"></div>
-        <p class="legend" id="vol-legend"></p>
       </section>
 
       <section class="card">
@@ -196,6 +215,10 @@
       <p class="fineprint" id="build"></p>
     </section>
   </main>
+
+  <!-- One bottom-anchored primary action, inside the thumb arc. Fixed rather than in
+       flow: it must be reachable without scrolling whatever the session length. -->
+  <div class="logbar" id="logbar" hidden></div>
 
   <div class="lightbox" id="lightbox" hidden>
     <button class="lightbox-close" id="lightbox-close" aria-label="Close photo">&times;</button>
