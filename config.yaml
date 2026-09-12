@@ -24,18 +24,23 @@ athlete:
 # from shoulders into shoulders+back. lats 16->28, upper_back 4->8 and rear_delts
 # 12->16 follow from that and nothing else moved. Rederived with
 #   python3 analyze.py bands --plan gym80
+# 2026-09-12: Saturday was replaced wholesale with four gym80 machines (3030 leg
+# press, 3001 leg extension, 4416 Bootymizer, 3099 standing lateral raise), so the
+# row and the RDL left the routine. quads 8->16, glutes 16->20, side_delts 16->20;
+# lats 28->24, upper_back 8->4, hamstrings 8->4, biceps 16->12, triceps 20->16.
+# Rederived with `python3 analyze.py bands --plan gym80`.
 volume_targets:
   chest:        {min: 18, target: 20, max: 24}
-  lats:         {min: 23, target: 28, max: 33}
-  upper_back:   {min: 6, target: 8, max: 10}
+  lats:         {min: 20, target: 24, max: 28}
+  upper_back:   {min: 3, target: 4, max: 5}
   front_delts:  {min: 6, target: 8, max: 10}
-  side_delts:   {min: 14, target: 16, max: 20}
+  side_delts:   {min: 17, target: 20, max: 23}
   rear_delts:   {min: 13, target: 16, max: 19}
-  biceps:       {min: 15, target: 16, max: 19}
-  triceps:      {min: 19, target: 20, max: 23}
-  quads:        {min: 6, target: 8, max: 12}
-  hamstrings:   {min: 6, target: 8, max: 10}
-  glutes:       {min: 14, target: 16, max: 18}
+  biceps:       {min: 10, target: 12, max: 14}
+  triceps:      {min: 13, target: 16, max: 19}
+  quads:        {min: 13, target: 16, max: 19}
+  hamstrings:   {min: 3, target: 4, max: 5}
+  glutes:       {min: 17, target: 20, max: 23}
   calves:       {min: 0,  target: 0,  max: 5}
   core:         {min: 7, target: 8, max: 11}
 
@@ -94,8 +99,21 @@ analysis:
   adherence_window: 14    # days used for planned-vs-logged adherence
 
 balance_bands:
-  # Set-count ratios over the rolling 7-day window.
-  push_pull:      {min: 0.75, max: 1.35} # chest+front_delts+triceps : lats+upper_back+biceps,
-                                          # ~1.04 as routine.yaml is currently written
-  quad_hamstring: {min: 0.0, max: 1.5}   # quads : hamstrings - quads uncovered by design
-  upper_lower:    {min: 4.0, max: 14.0}  # upper : lower sets - runs high BY DESIGN
+  # Set-count ratios over the rolling 7-day window. UNLIKE volume_targets these are
+  # judgement bands, not derived from the routine - so a routine change does NOT move
+  # them. Two of them no longer fit the plan as written (2026-09-12) and are deliberately
+  # left alone rather than widened to make it pass:
+  push_pull:      {min: 0.75, max: 1.35} # chest+front_delts+triceps : lats+upper_back+biceps
+                                          # 44:40 = 1.10 as written - inside the band
+  quad_hamstring: {min: 0.0, max: 1.5}   # quads : hamstrings. 16:4 = 4.00 as written -
+                                          # OUTSIDE. The max of 1.5 was set when quads were
+                                          # uncovered by design; quads have been trained
+                                          # since 2026-09-09 and the RDL left the routine on
+                                          # 09-12, leaving one hamstring lift at 4 sets.
+                                          # The band is stale AND the ratio is real - which
+                                          # of the two to change is the user's call.
+  upper_lower:    {min: 4.0, max: 14.0}  # upper : lower sets. 120:40 = 3.00 as written -
+                                          # OUTSIDE the floor. The floor encodes "upper
+                                          # should dominate because the cycling loads the
+                                          # legs and this log never sees it"; two gym80 leg
+                                          # days have since been added. Same call.

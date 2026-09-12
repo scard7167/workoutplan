@@ -259,7 +259,8 @@ leg_press_machine:
   # gym80 Sygnum 3031 "Beinpresse liegend" - lying plate-stack leg press. The product
   # copy names "Oberschenkelmuskulatur und Gluteus", so quads and glutes are co-primary,
   # exactly as back_squat is.
-  aliases: [gym80 3031, beinpresse liegend, beinpresse, leg press, leg press machine]
+  aliases: [gym80 3030, gym80 3031, beinpresse sitzend, beinpresse, leg press,
+            leg press machine, seated leg press]
   muscles: [quads, glutes]
   increment: 5   # UNVERIFIED, see incline_chest_press_machine
   rep_range: [8, 12]
@@ -271,7 +272,8 @@ leg_extension_machine:
   # flexion are different lifts and averaging their loads into one e1RM series is
   # meaningless. This entry is the EXTENSION half only. If the curl half of 5013 gets
   # used rather than 3003, that is a different stack again and needs its own entry - ask.
-  aliases: [gym80 5013, beinstrecker, leg extension, knee extension, leg extension machine]
+  aliases: [gym80 3001, gym80 5013, beinstrecker, leg extension, knee extension,
+            leg extension machine]
   muscles: [quads]
   increment: 5   # UNVERIFIED, see incline_chest_press_machine
   rep_range: [10, 15]

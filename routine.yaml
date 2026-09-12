@@ -47,13 +47,11 @@ plans:
     lifts:
       - bench_press
       - pullup
-      - chest_supported_row
       - overhead_press
       - lateral_raise
       - face_pull
       - barbell_curl
       - triceps_pushdown
-      - romanian_deadlift
       - hanging_leg_raise
       - incline_chest_press_machine
       - standing_chest_press_machine
@@ -142,12 +140,12 @@ plans:
           - {exercise: face_pull, sets: 4}
           - {exercise: hanging_leg_raise, sets: 4}
       sat:
-        name: row + hinge
+        name: legs + side delts (gym80)
         plan:
-          - {exercise: chest_supported_row, sets: 4}
-          - {exercise: romanian_deadlift, sets: 4}
-          - {exercise: barbell_curl, sets: 4}
-          - {exercise: triceps_pushdown, sets: 4}
+          - {exercise: leg_press_machine, sets: 4}
+          - {exercise: leg_extension_machine, sets: 4}
+          - {exercise: hip_thrust_machine, sets: 4}
+          - {exercise: standing_lateral_raise_machine, sets: 4}
       sun:
         name: full
         plan:

@@ -19,6 +19,14 @@ pullover, 3025 reverse butterfly, 3020 back pull), turning it from shoulders int
 shoulders+back: the week is 156 sets across days of 16-32, and lats (16->28),
 upper_back (4->8) and rear_delts (12->16) were rederived to match. Friday is now the
 biggest day of the week.
+**On 2026-09-12 Saturday was replaced wholesale** with four gym80 machines (3030 leg
+press, 3001 leg extension, 4416 Bootymizer, 3099 standing lateral raise), so
+`chest_supported_row` and `romanian_deadlift` left the routine entirely - the RDL was
+the week's only hip hinge. No muscle lost its last lift (checked before the swap), but
+three of Saturday's four machines repeat Wednesday's leg day three days later, and TWO
+BALANCE BANDS NOW FAIL AS WRITTEN: quad:hamstring 16:4 = 4.00 against a max of 1.5, and
+upper:lower 120:40 = 3.00 against a floor of 4.0. Those bands were deliberately NOT
+widened - see the comments in config.yaml. The week is still 156 sets.
 
 ## Files
 
