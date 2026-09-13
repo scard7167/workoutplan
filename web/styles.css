@@ -679,3 +679,14 @@ body.haslogbar main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); 
 
 #plan-verdict .callout:last-child { margin-bottom: 12px; }
 .planrenamewrap { margin-top: 10px; }
+
+/* Focus mode is offered, never imposed. Quiet by default - it is a choice about how to
+   read the screen, not the screen's own headline. */
+.modetoggle {
+  display: block; width: 100%; min-height: 44px; margin: 0 0 12px; cursor: pointer;
+  background: none; border: 1px solid var(--line); border-radius: 8px;
+  color: var(--muted); font: 400 12px var(--sans); touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.modetoggle[aria-pressed="true"] { border-color: var(--accent-d); color: var(--accent); }
+.modetoggle:active { color: var(--ink); }

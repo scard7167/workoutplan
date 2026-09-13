@@ -38,8 +38,12 @@
         <div class="progress" id="today-progress"></div>
       </div>
 
-      <!-- Rest timer. The phone comes out between sets anyway; this is what it is for. -->
+      <!-- Rest timer. The phone comes out between sets anyway; this is what it is for.
+           Appears once a set is logged, from either view. -->
       <div class="restbar" id="restbar" hidden></div>
+
+      <!-- Opt-in. Off by default: Today is the list you built. -->
+      <button class="modetoggle" id="btn-focusmode" aria-pressed="false" hidden></button>
 
       <!-- The focused set. One exercise at a time on an editable day, so nothing needs
            scrolling mid-session. History days fall back to the flat list below. -->
@@ -75,7 +79,9 @@
         <code>config.yaml</code>, never from anywhere else. Weight, reps AND RIR are
         logged: the rule needs RIR &le; 2 to add load and RIR 0 to deload, so leaving RIR
         blank means the load holds however the set went. Blank is still allowed - it is
-        recorded as unverified, and unverified is never treated as proven.
+        recorded as unverified, and unverified is never treated as proven. A weight box
+        takes the same grammar as chat: <code>60</code>, <code>60@2</code>,
+        <code>60x8</code>, <code>60x8 @2</code>.
       </p>
     </section>
 

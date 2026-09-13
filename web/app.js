@@ -54,11 +54,17 @@ const state = {
   focus: null,           // {exercise, setNo} - the set being entered right now
   entry: null,           // {weight, reps, rir} - its editable values
   rest: null,            // epoch ms the rest timer started, or null
-  showLifts: false,      // the per-lift ledger, collapsed by default
-  showFull: false,       // the full flat session list, collapsed by default
-  showScan: false,       // the photo dump, collapsed - onboarding, not daily
-  showSettings: false,   // plan rename + sync note
-  showHelp: false,       // the editing fine print
+  showLifts: true,       // the per-lift ledger - expanded, as it was
+  // 2026-09-13: every one of these defaults was flipped back. The UX review said to
+  // demote these and the first pass did - and the result was an app that felt replaced
+  // rather than redesigned. Relocating someone's controls is not a design change. So the
+  // DEFAULT is the app as it was built, and everything the review proposed is a control
+  // you can reach for rather than a layout imposed on you.
+  focusMode: false,      // one-set-at-a-time view. OFF: the flat list is Today.
+  showFull: true,        // the flat session list - the primary view again
+  showScan: true,        // the photo dump, open as it was
+  showSettings: true,    // plan rename + sync note, open as it was
+  showHelp: true,        // the editing fine print, open as it was
   plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
   planName: {},          // renames and new plans this device made, id -> name
   routineBy: {},         // structural edits, per plan
@@ -449,6 +455,29 @@ function renderFocus() {
     document.body.classList.remove("haslogbar");
     $("today-plan").hidden = false;
     const fb0 = $("btn-full"); if (fb0) fb0.hidden = true;
+    const tg0 = $("btn-focusmode"); if (tg0) tg0.hidden = true;
+    return;
+  }
+  // Focus mode is a CHOICE. Off, Today renders exactly as it did before the UX passes:
+  // the flat list, the weight boxes, the set-count steppers, no card and no fixed bar.
+  const toggle = $("btn-focusmode");
+  if (toggle) {
+    toggle.hidden = false;
+    toggle.innerHTML = state.focusMode
+      ? "back to the full list" : "focus one set at a time";
+    toggle.setAttribute("aria-pressed", String(state.focusMode));
+    toggle.onclick = () => {
+      state.focusMode = !state.focusMode;
+      state.showFull = !state.focusMode;
+      saveSession(); renderToday();
+    };
+  }
+  if (!state.focusMode) {
+    card.innerHTML = ""; next.innerHTML = "";
+    if (bar) bar.hidden = true;
+    document.body.classList.remove("haslogbar");
+    $("today-plan").hidden = false;
+    const fbx = $("btn-full"); if (fbx) fbx.hidden = true;
     return;
   }
   ensureFocus();
@@ -872,6 +901,22 @@ function renderToday() {
 // shifting any other slot. This is the FLAT path, kept for history days and as the
 // fallback when there is no focused set; the focus card is the primary way in and is
 // what asks for reps and RIR.
+// `60` | `60@2` | `60x8` | `60x8 @2` | `bw` -> {weight, reps|null, rir|null}
+// Deliberately the same shapes the chat logger accepts (see CLAUDE.md, Logging), so
+// there is one grammar for a set in this app and not two.
+function parseSlot(raw) {
+  const t = String(raw).trim().toLowerCase().replace(",", ".");
+  const m = t.match(/^(bw|\+?\d+(?:\.\d+)?)\s*(?:x\s*(\d+))?\s*(?:@\s*(\d))?$/);
+  if (!m) return null;
+  const weight = m[1] === "bw" ? 0 : parseFloat(m[1].replace("+", ""));
+  if (!Number.isFinite(weight) || weight < 0) return null;
+  const reps = m[2] ? parseInt(m[2], 10) : null;
+  if (reps !== null && reps < 1) return null;
+  const rir = m[3] === undefined ? null : parseInt(m[3], 10);
+  if (rir !== null && rir > 4) return null;
+  return { weight, reps, rir };
+}
+
 function commitSlot(exercise, setNo, raw) {
   const trimmed = raw.trim();
   const existing = state.sets.findIndex(s => s.exercise === exercise && s.set_no === setNo);
@@ -888,25 +933,37 @@ function commitSlot(exercise, setNo, raw) {
   const guard = logGuard(exercise);
   if (guard) { renderToday(); return showFeedback(guard); }
   const ex = LIB[exercise];
-  const weight = parseFloat(trimmed.replace(",", "."));
-  if (!Number.isFinite(weight) || weight < 0) {
+  // The box takes the SAME grammar the chat logger takes, so reps and RIR are enterable
+  // here without a single new control or a changed row: `60`, `60@2`, `60x8`, `60x8 @2`.
+  // Typing just a weight behaves exactly as it always did - reps fall back to the
+  // prescribed target and RIR stays blank, which the rule will not treat as proven.
+  // This is how the RIR the progression rule needs reaches the DEFAULT view: adding a
+  // stepper to all sixteen slots would have been another layout imposed rather than a
+  // capability offered.
+  const parsed = parseSlot(trimmed);
+  if (!parsed) {
     renderToday();
-    return showFeedback(`<span class="err">? "${raw}" is not a valid weight</span>`);
+    return showFeedback(
+      `<span class="err">? "${raw}" is not a weight</span>\n` +
+      `<span class="hint">60 &middot; 60@2 &middot; 60x8 &middot; 60x8 @2 - weight, then ` +
+      `optional xREPS and @RIR, the same as typing a set in chat.</span>`);
   }
+  const weight = parsed.weight;
   if (weight === 0 && !ex.bodyweight) {
     renderToday();
     return showFeedback(`<span class="err">? weight 0 but ${label(exercise)} is not bodyweight</span>`);
   }
 
-  // The flat box captures a weight only, so reps fall back to the prescribed target and
-  // RIR stays blank - unverified, which the rule will not treat as proven. Reps and RIR
-  // are entered on the focus card.
   const row = { exercise, set_no: setNo, weight_kg: weight,
-                reps: prescribe(exercise).target_reps, rir: null };
+                reps: parsed.reps ?? prescribe(exercise).target_reps,
+                rir: parsed.rir };
   if (existing === -1) state.sets.push(row); else state.sets[existing] = row;
   state.sessionDate = state.date;
   state.sticky = exercise;
   showFeedback(feedback(row));
+  // The timer is additive, not a relocation: it works from whichever view logged the
+  // set. Starting it only from the focus card would have made it a focus-mode feature.
+  startRest();
   renderToday();
   saveSession();
 }
@@ -957,12 +1014,10 @@ function flagOf(n, band, muscle) {
 }
 
 function renderKpis() {
-  // Strength index, adherence and 7d load are derived aggregates. Before any session
-  // exists they say "nothing logged yet" three times in the best position on the page,
-  // so the row is not rendered at all until there is something to aggregate.
+  // The review wanted this row gone until data exists. Hiding a component is a cut, not
+  // a design change, so it stays: its empty states are honest and it is where it was.
   const kp = $("kpis");
-  if (kp) kp.hidden = !ANALYTICS.sessions.length
-    && !state.committed.length && !remoteRows().length;
+  if (kp) kp.hidden = false;
   const ix = ANALYTICS.index, ad = ANALYTICS.adherence, br = ANALYTICS.bridge;
   const vals = Object.values(ix.muscles).map(m => m.index).filter(v => v !== null);
   const prior = Object.values(ix.exercises).map(e => e.prior_index).filter(v => v !== null);
@@ -2965,7 +3020,8 @@ function saveSession() {
       viewDate: state.date, dayOffset: state.dayOffset,
       // The rest timer is part of the session, not of the page: locking the phone
       // between sets is the normal case, and a timer that resets on reload is useless.
-      rest: state.rest, focus: state.focus, showFull: state.showFull })); }
+      rest: state.rest, focus: state.focus, showFull: state.showFull,
+      focusMode: state.focusMode })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -2982,6 +3038,7 @@ function loadSession() {
     // Opening the full list is a choice about the session in progress, not about the
     // page load - a reload that silently re-collapses it loses the place you were at.
     if (typeof d.showFull === "boolean") state.showFull = d.showFull;
+    if (typeof d.focusMode === "boolean") state.focusMode = d.focusMode;
     // The sets carry their OWN date, so they survive a reload whatever day was on screen
     // - but only as that date. A session left open overnight reappears under the day it
     // was logged on, never silently under today.

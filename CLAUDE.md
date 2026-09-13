@@ -151,10 +151,28 @@ sessions in the last 7 days, the two biggest volume gaps, suggested focus. Then 
 Never open a new session while `current_session.md` exists - ask whether to commit
 (`/end`) or discard it.
 
-### Logging in the web app - the focused set
+### Logging in the web app
 
-**2026-09-12, from the UX review: Today is a focus view, not a list.** It is used
-one-handed with a barbell nearby, so exactly one set is in play. The card carries the
+**2026-09-13: the DEFAULT view is the app as it was built.** The first UX pass made
+Today a focus view and demoted the flat list, the photo dump, the plan settings and the
+per-lift ledger behind taps. The result read as a replaced app rather than a redesigned
+one, and the user said so. **Relocating someone's controls is not a design change.** So
+every one of those defaults was flipped back: Today opens on the flat list with its
+weight boxes and set-count steppers, Plan opens with the photo dump and settings
+expanded, Trends opens with the ledger expanded and the KPI row visible.
+
+What the review proposed is still all there - as a CONTROL you reach for, never a layout
+imposed. `focus one set at a time` on Today turns the focus view on; it is off by
+default and persisted per session.
+
+**The weight box takes the chat grammar**: `60`, `60@2`, `60x8`, `60x8 @2`. That is how
+reps and RIR reach the default view without a single new control or a changed row -
+adding a stepper to all sixteen slots would have been another layout imposed rather than
+a capability offered. `parseSlot()` accepts the same shapes the chat logger does, so
+there is one grammar for a set in this app and not two. Typing just a weight behaves
+exactly as it always did.
+
+**Focus mode**, when on: exactly one set is in play. The card carries the
 prescription as the hero, last session's same-numbered set beneath it, three steppers
 (weight / reps / RIR) for the days you deviate, and ONE bottom-anchored 52px action that
 logs the set, starts the rest timer and advances to the next slot. The rest of the day
@@ -171,7 +189,7 @@ blank: blank is a value here, not an absence to skip past.
 A day with logged sets is still HISTORY and still renders the flat read-only list - a
 record is not an entry form.
 
-**The flat list is COLLAPSED, never removed** (`full session`). Two things only it can do,
+**In focus mode the flat list is collapsed, never removed** (`full session`). Two things only it can do,
 and hiding it outright broke both: correcting an arbitrary slot, and the set-count stepper
 that Today shares with Plan - "set counts are changed from EITHER tab" is a documented
 invariant and the first version of this change silently violated it. It captures a weight
@@ -413,10 +431,11 @@ today's volume.
 
 ### Collapsed, never cut
 
-Three things moved behind a tap on the Plan tab rather than being deleted: the photo
-dump (`add a machine from a photo`), the plan rename plus the sync/export note (`plan
-name - sync and export`), and the editing fine print. The review said remove them; the
-standing instruction is that UX improves and nothing is cut, so they collapse.
+The photo dump, the plan rename plus the sync/export note, and the editing fine print
+all have a disclosure control - but they are **OPEN by default**, as they were. The
+review said remove them; the first pass collapsed them; both were wrong, because a
+control you have to find is not the same control. The disclosure exists so YOU can
+collapse them, not so the app can.
 
 Two rules fall out of that and are load-bearing:
 
@@ -486,9 +505,8 @@ primary requirement under a list that says nothing until weeks of data exist.
   deficit.
 - **stalls are capped at three rows** with a count of the rest. Exception reporting, not
   a ledger.
-- the **per-lift ledger is collapsed** behind `all N lifts`. Demoted, never deleted.
-- the **KPI row is not rendered at all** until a session exists. Three derived aggregates
-  saying "nothing logged yet" in the best position on the page is worse than nothing.
+- the **per-lift ledger and the KPI row stay expanded.** The review wanted both demoted;
+  hiding a component is a cut, not a design change, so only the card ORDER moved.
 
 Bands stay per-muscle and DERIVED from the routine. The review proposed a flat 10-20
 shaded band for every muscle; that would be wrong here and is not what was built -
@@ -548,10 +566,13 @@ now quads are trained directly.
   of Trends because a plan changed is a bug, not a filter.
 - **A file input is never inside a hidden container.** Off-screen and in layout, always,
   or iOS silently refuses to open the picker. This has broken once already.
-- **Nothing is removed to improve a screen - it is collapsed.** Every control this app
-  has ever grown stays reachable; `scratchpad/nocut.mjs` enumerates them and is the
-  standing guard. A UX review that says "remove X" means "stop X being the first thing
-  on the screen".
+- **A design change may not move or hide a control.** It may reorder cards, retype a
+  label, restyle a component, or ADD a readout. It may not demote what someone reaches
+  for by habit, and it may not change the interaction model - those are product changes
+  and need asking for in those words. A UX review that says "remove X" is evidence X is
+  badly placed, not permission to move it. `scratchpad/nocut.mjs` enumerates every
+  control across the three tabs and `scratchpad/default.mjs` asserts what the app opens
+  ON; both are standing guards, and the second exists because the first was not enough.
 - **A focus view must never be the ONLY way in.** Today shows one set at a time, but the
   full flat list stays one tap away: a single-exercise view is worse than a list the
   moment a machine is taken, and the set-count stepper Today shares with Plan lives in
