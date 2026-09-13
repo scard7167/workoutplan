@@ -4,7 +4,14 @@ athlete:
   sessions_per_week: 7
   # 7 short strength sessions on top of 30-50 km/week of running and cycling that this
   # log never sees. Recovery is the binding constraint, not gym time, so the routine
-  # runs 10-12 working sets per session rather than 20+. See CLAUDE.md hard rules.
+  # was DESIGNED around session_sets below. See CLAUDE.md hard rules.
+
+  # Working sets per SESSION the routine was designed around. The Plan tab judges its
+  # headline against this rather than printing a bare count: 156 sets a week means
+  # nothing until it is divided by the sessions that are meant to absorb it. Held here
+  # and read in one place, so the standard and the number cannot drift apart - which is
+  # the risk the UX review flagged about hardcoding a band in two screens.
+  session_sets: {min: 10, max: 12}
 
 # Weekly DIRECT hard-set targets per muscle, rolling 7 days.
 # These are DERIVED FROM routine.yaml: the target is what the routine delivers when it

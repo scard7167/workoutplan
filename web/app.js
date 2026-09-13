@@ -14,7 +14,7 @@
 // this session can no longer tell "hit the target" from "missed it," so a deload can
 // never be triggered from a Today-logged set. That trade is deliberate, made once here,
 // not something to silently work around elsewhere.
-import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE,
+import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ATHLETE, ROUTINE,
          PLANS, SCHEDULE, ACTIVE_PLAN, BANDS_BY_PLAN, ANALYTICS, SEED_LOG,
          BUILD } from "./data.js";
 
@@ -56,6 +56,9 @@ const state = {
   rest: null,            // epoch ms the rest timer started, or null
   showLifts: false,      // the per-lift ledger, collapsed by default
   showFull: false,       // the full flat session list, collapsed by default
+  showScan: false,       // the photo dump, collapsed - onboarding, not daily
+  showSettings: false,   // plan rename + sync note
+  showHelp: false,       // the editing fine print
   plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
   planName: {},          // renames and new plans this device made, id -> name
   routineBy: {},         // structural edits, per plan
@@ -792,7 +795,9 @@ function renderToday() {
     return `<li class="${cls}" data-ex="${p.exercise}">
       <div class="rowtop">
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
+        <span class="rx ${top === null ? "" : "live"}">${top === null
+          ? `${p.sets} sets`
+          : `${headline}<span class="rxu">kg</span> &middot; ${p.sets} sets`}</span>
       </div>
       <span class="why ${history_ ? "" : rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
         history_
@@ -1717,6 +1722,106 @@ function renderAll() { pendingRender = false; renderToday(); renderTrends(); ren
 // changes what Today prescribes and what the Plan tab edits, and nothing else: the set
 // counts and the order follow the plan they were set on, and every trend keeps reading
 // log.csv, which does not know plans exist.
+// The verdict, and the coverage strip. Both are the plan judged against itself: no log
+// involved, so they say what the WEEK asks for rather than what happened. Mirrors
+// analyze.py's plan_coverage() over effectivePlan(), so a plan edited on the phone and
+// not yet exported is judged too - the same arrangement as the progression rule.
+function planCoverage() {
+  const per = {};
+  for (const m of MUSCLES) per[m] = 0;
+  const dayS = {};
+  for (const d of DAYS) {
+    let n = 0;
+    for (const p of effectivePlan(d)) {
+      n += p.sets;
+      for (const m of (LIB[p.exercise]?.muscles || [])) per[m] += p.sets;
+    }
+    dayS[d] = n;
+  }
+  const week = DAYS.reduce((a, d) => a + dayS[d], 0);
+  const freq = ATHLETE.sessions_per_week || 7;
+  const band = ATHLETE.session_sets || { min: 10, max: 12 };
+  const perSession = freq ? +(week / freq).toFixed(1) : null;
+  return { per, dayS, week, freq, band, perSession,
+    planned_days: DAYS.filter(d => dayS[d]).length,
+    verdict: perSession === null ? null
+      : perSession >= band.min && perSession <= band.max ? "in band"
+      : perSession > band.max ? "over" : "under",
+    multiple: perSession === null ? null : +(perSession / band.max).toFixed(1) };
+}
+
+function renderPlanVerdict() {
+  const el = $("plan-verdict");
+  if (!el) return;
+  const c = planCoverage();
+  const cls = c.verdict === "in band" ? "ok" : c.verdict === "over" ? "warn" : "flat";
+  // Against sessions_per_week as recorded, not an assumed frequency: this log has no
+  // trained-day data to infer one from, and inventing it would be the one thing this
+  // log exists not to do. Adherence reports the real thing once sessions land.
+  el.innerHTML =
+    `<p class="callout ${cls}"><b>${c.week} sets over ${c.freq} sessions =
+      ${c.perSession} per session.</b> ` +
+    (c.verdict === "in band"
+      ? `Inside the ${c.band.min}-${c.band.max} the routine was designed around.`
+      : c.verdict === "over"
+        ? `${c.multiple}&times; the top of the ${c.band.min}-${c.band.max} design.
+           Recovery is the binding constraint, not gym time.`
+        : `Below the ${c.band.min}-${c.band.max} design.`) +
+    `</p>` +
+    `<p class="callout flat">${c.planned_days} of 7 weekdays carry work &middot;
+      ${DAYS.map(d => `${d} ${c.dayS[d]}`).join(" &middot; ")}</p>`;
+}
+
+// Seven-second scan: which muscles the week asks for, against the same bands Trends
+// measures the log against. A muscle at 0 cannot come right by training harder - the
+// week does not ask for it - so it is called out separately from a low one.
+function renderPlanCoverage() {
+  const el = $("plan-coverage");
+  if (!el) return;
+  const { per } = planCoverage();
+  const uncovered = new Set(UNCOVERED);
+  const cells = MUSCLES.map(m => {
+    const b = BANDS[m], n = per[m];
+    const f = uncovered.has(m) ? "UNCOVERED"
+      : n < b.min || n > b.max ? "RED" : n < b.target ? "AMBER" : "GREEN";
+    return `<div class="covcell ${f}" title="${label(m)}: ${n} planned, band ${b.min}-${b.max}">
+      <span class="covn">${n}</span><span class="covm">${label(m).slice(0, 5)}</span></div>`;
+  }).join("");
+  const none = MUSCLES.filter(m => !uncovered.has(m) && per[m] === 0);
+  el.innerHTML = `<div class="covlab">planned per muscle &middot; vs band</div>
+    <div class="covstrip">${cells}</div>` +
+    (none.length ? `<p class="callout crit"><b>No day trains ${none.map(label).join(", ")}.</b>
+      That is a routine edit, not an adherence problem - training harder cannot fix a week
+      that does not ask for it.</p>` : "");
+}
+
+function renderPlanDisclosures() {
+  const pairs = [
+    ["btn-scan", "scancard", "showScan", "add a machine from a photo", "hide the photo dump"],
+    ["btn-plansettings", "plansettings", "showSettings", "plan name &middot; sync and export",
+     "hide plan settings"],
+    ["btn-planhelp", "planhelp", "showHelp", "how editing the plan works", "hide"],
+  ];
+  for (const [bid, pid, key, closed, open] of pairs) {
+    const b = $(bid), panel = $(pid);
+    if (!b || !panel) continue;
+    b.innerHTML = state[key] ? open : closed;
+    b.setAttribute("aria-expanded", String(state[key]));
+    panel.hidden = !state[key];
+    b.onclick = () => { state[key] = !state[key]; renderPlanDisclosures(); };
+  }
+  // A real warning - dropped edits, or unexported drift that makes the bands measure a
+  // different plan - opens the section it lives in rather than hiding behind a tap. The
+  // informational note does not, or the collapse would never hold.
+  const note = $("plannote");
+  if (note && !note.hidden && note.dataset.warn === "1" && !state.showSettings) {
+    state.showSettings = true;
+    $("plansettings").hidden = false;
+    const b = $("btn-plansettings");
+    if (b) { b.innerHTML = "hide plan settings"; b.setAttribute("aria-expanded", "true"); }
+  }
+}
+
 function renderPlanPicker() {
   const el = $("planpicker");
   if (!el) return;
@@ -1810,6 +1915,9 @@ function renderPlan() {
   const echo = $("plan-echo");
   if (echo) echo.innerHTML = "";
   renderPlanPicker();
+  renderPlanVerdict();
+  renderPlanCoverage();
+  renderPlanDisclosures();
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
 
@@ -2166,6 +2274,11 @@ function renderPlanNote(structural) {
       : `Your exercise order is stored and follows you across devices. It survives a new ` +
         `publish - only set counts and lift changes need Export.`);
   el.hidden = !bits.length;
+  // A warning has to open the section it lives in; the steady-state "your order is
+  // saved" line must not, or the collapse never collapses. One flag, set here, so the
+  // disclosure does not have to guess from the text.
+  const warn = !!(state.dropped || structural);
+  el.dataset.warn = warn ? "1" : "";
   el.className = "scannote" + (state.dropped ? " bad" : "");
   el.innerHTML = bits.join("<br><br>");
 }

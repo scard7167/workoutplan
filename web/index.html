@@ -167,13 +167,33 @@
         </div>
         <div class="progress" id="plan-summary"></div>
       </div>
-      <section class="card" id="scancard">
+
+      <!-- A verdict on the headline, not just a count: 156 sets a week means nothing
+           until it is divided by the sessions meant to absorb it. -->
+      <div id="plan-verdict"></div>
+
+      <!-- Coverage: what the week ASKS FOR per muscle, against the same bands Trends
+           measures against. A muscle at 0 here cannot be fixed by training harder. -->
+      <div id="plan-coverage"></div>
+
+      <div id="planpicker" class="planpicker"></div>
+      <div class="scannote" id="plan-echo" aria-live="polite"></div>
+
+      <!-- THE FILE INPUT LIVES HERE, outside every collapsible region, and must stay
+           there: it is off-screen but in layout on purpose, because a file input inside
+           a [hidden] or display:none container is unreliable on iOS even behind a label.
+           Collapsing the photo card around it is exactly how that would regress. -->
+      <input type="file" id="photos" accept="image/*" multiple class="filein">
+
+      <!-- Adding machines is onboarding, done a handful of times; it used to occupy a
+           quarter of the screen above the plan it feeds. Collapsed, not removed. -->
+      <button class="disclose" id="btn-scan" aria-expanded="false"></button>
+      <section class="card" id="scancard" hidden>
         <div class="cardhead">
           <h2>Photo dump</h2>
           <span class="meta" id="scan-meta"></span>
         </div>
         <div class="drop" id="drop">
-          <input type="file" id="photos" accept="image/*" multiple class="filein">
           <label for="photos" id="btn-pick" class="pickbtn" tabindex="0">Add machine photos</label>
           <button id="btn-identify" class="primary" hidden>Identify</button>
           <p class="dropnote">
@@ -187,13 +207,18 @@
         <div id="scanout"></div>
       </section>
 
-      <div id="planpicker" class="planpicker"></div>
-      <label class="planrenamewrap">plan name
-        <input id="planrename" type="text" autocomplete="off" autocapitalize="words"
-               spellcheck="false" aria-label="rename this plan">
-      </label>
-      <div class="scannote" id="plannote" hidden></div>
-      <div class="scannote" id="plan-echo" aria-live="polite"></div>
+      <!-- Renaming is rare and an open text input invites an accidental edit, so it is
+           behind a tap - but it is still here, and so is what the app does with your
+           order and your set counts. Documentation in the interface is a smell; deleting
+           the explanation of a non-obvious behaviour is worse. -->
+      <button class="disclose" id="btn-plansettings" aria-expanded="false"></button>
+      <div id="plansettings" hidden>
+        <label class="planrenamewrap">plan name
+          <input id="planrename" type="text" autocomplete="off" autocapitalize="words"
+                 spellcheck="false" aria-label="rename this plan">
+        </label>
+        <div class="scannote" id="plannote" hidden></div>
+      </div>
       <div id="planweek"></div>
       <datalist id="exlist"></datalist>
       <div class="actions">
@@ -201,7 +226,8 @@
         <button id="btn-reset">Reset to file</button>
       </div>
       <pre class="csv" id="yamlout" hidden></pre>
-      <p class="fineprint">
+      <button class="disclose" id="btn-planhelp" aria-expanded="false"></button>
+      <p class="fineprint" id="planhelp" hidden>
         Edits live in this browser. Export and paste into <code>routine.yaml</code> to make
         them the plan of record - the CLI, the prescriptions and the volume bands all read
         that file. <b>Exercise order is the exception</b>: it changes no volume, so it is

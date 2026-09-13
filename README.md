@@ -28,6 +28,7 @@ python3 analyze.py validate --log log.example.csv
 python3 analyze.py volume   --log log.example.csv --window 7
 python3 analyze.py plans                       # the plans, and which is active
 python3 analyze.py bands --plan gym80          # the bands a plan delivers, to paste
+python3 analyze.py coverage                    # what the week asks for, per muscle
 ```
 
 Requires Python 3.10+ and pyyaml.

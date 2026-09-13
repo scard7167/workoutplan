@@ -26,7 +26,9 @@ the week's only hip hinge. No muscle lost its last lift (checked before the swap
 three of Saturday's four machines repeat Wednesday's leg day three days later, and TWO
 BALANCE BANDS NOW FAIL AS WRITTEN: quad:hamstring 16:4 = 4.00 against a max of 1.5, and
 upper:lower 120:40 = 3.00 against a floor of 4.0. Those bands were deliberately NOT
-widened - see the comments in config.yaml. The week is still 156 sets.
+widened - see the comments in config.yaml. The week is still 156 sets, which the Plan
+tab now states as 22.3 sets per session against the 10-12 the routine was designed
+around - 1.9x, printed on the screen rather than left in this file.
 
 ## Files
 
@@ -263,6 +265,10 @@ recomputes a deep metric in JavaScript.
 - `python3 analyze.py plans` - every plan, its lifts and weekly sets, and which is active
 - `python3 analyze.py bands [--plan ID]` - the volume bands a plan DELIVERS, as a block
   to paste into `config.yaml`. Bands are derived from the plan they measure, never guessed
+- `python3 analyze.py coverage [--plan ID]` - what the plan SCHEDULES per muscle against
+  its band, plus the headline judged against `athlete.session_sets`. No log involved:
+  this asks whether the week even asks for the work, which `volume` cannot answer. A
+  muscle at 0 here is a routine edit, never an adherence problem
 - `python3 analyze.py report` - all of the above, in order
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
@@ -383,6 +389,50 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   `routine.yaml` it was made against, and IS dropped when a newer one ships - the Plan
   tab says so out loud rather than letting it vanish unannounced.
 
+### What the Plan tab leads with
+
+**A verdict, not a count.** `156 sets / week` means nothing until it is divided by the
+sessions meant to absorb it, so the headline is followed by `156 over 7 sessions = 22.3
+per session, 1.9x the top of the 10-12 design`. Judged against
+`athlete.sessions_per_week` and `athlete.session_sets` in `config.yaml` - held in ONE
+place and read in one place, which is the drift the UX review warned about.
+
+It is judged against the frequency RECORDED, never an inferred one. The review's mock
+asserted "7 planned days, you train 3"; this log has no trained-day data to infer that
+from, and `adherence` is the thing that reports it honestly once sessions land.
+
+**A coverage strip**: planned sets per muscle against the same bands Trends measures the
+log against. `uncovered_by_design` shows dashed, never RED. A muscle at 0 gets its own
+callout, because it cannot be fixed by training harder - the week does not ask for it,
+which is a different problem from a missed session and needs saying differently.
+
+`plan_coverage()` in `analyze.py` is the canonical implementation; `planCoverage()` in
+`web/app.js` mirrors it over `effectivePlan()` so a plan edited on the phone and not yet
+exported is judged too. Same arrangement, and same reason, as the progression rule and
+today's volume.
+
+### Collapsed, never cut
+
+Three things moved behind a tap on the Plan tab rather than being deleted: the photo
+dump (`add a machine from a photo`), the plan rename plus the sync/export note (`plan
+name - sync and export`), and the editing fine print. The review said remove them; the
+standing instruction is that UX improves and nothing is cut, so they collapse.
+
+Two rules fall out of that and are load-bearing:
+
+- **The photo dump's `<input type="file">` lives OUTSIDE every collapsible region**, as a
+  direct child of the Plan panel. It is off-screen but IN LAYOUT on purpose: a file input
+  inside a `[hidden]` or `display:none` container does not reliably open the picker on
+  iOS, even behind its label. Collapsing the card around it is exactly how that would
+  regress, and it is the reason the card and the input are separated in the markup.
+- **A WARNING opens the section it lives in; an informational note does not.**
+  `renderPlanNote()` sets `data-warn` on the node, and only dropped edits or unexported
+  drift set it. Without that distinction the steady-state "your order is saved" line
+  opened the settings section on every render and the collapse never held.
+
+`scancard`, `plansettings` and `planhelp` state is NOT persisted - these are read once
+and closed, unlike the session's own `showFull`.
+
 ### Switching weekly plans on the phone
 
 The Plan tab carries one chip per plan; the selected one drives Today, the Plan tab and
@@ -496,6 +546,12 @@ now quads are trained directly.
   stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
   lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
   of Trends because a plan changed is a bug, not a filter.
+- **A file input is never inside a hidden container.** Off-screen and in layout, always,
+  or iOS silently refuses to open the picker. This has broken once already.
+- **Nothing is removed to improve a screen - it is collapsed.** Every control this app
+  has ever grown stays reachable; `scratchpad/nocut.mjs` enumerates them and is the
+  standing guard. A UX review that says "remove X" means "stop X being the first thing
+  on the screen".
 - **A focus view must never be the ONLY way in.** Today shows one set at a time, but the
   full flat list stays one tap away: a single-exercise view is worse than a list the
   moment a machine is taken, and the set-count stepper Today shares with Plan lives in

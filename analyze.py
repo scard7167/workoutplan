@@ -1119,6 +1119,81 @@ def print_adherence(a: dict) -> None:
 # json export - the web app renders these numbers, it does not recompute them
 # --------------------------------------------------------------------------- #
 
+def plan_coverage(routine: dict, lib: dict, cfg: dict, plan_id: str | None = None) -> dict:
+    """What a plan SCHEDULES per muscle, against that plan's band.
+
+    This is the plan judged against itself - no log involved. It answers a different
+    question from volume_report: not "did you do the work" but "does the week even ask
+    for it". A muscle at 0 here can never come right by training harder, and that is the
+    distinction the volume bars alone cannot draw.
+
+    THE canonical implementation. web/app.js mirrors it over effectivePlan() so the phone
+    can judge a plan it has edited but not exported yet - the same arrangement as the
+    progression rule and today's volume, and for the same reason."""
+    pid = plan_id or routine["active"]
+    plan = plan_of(routine, pid)
+    bands = bands_for(cfg, pid)
+    uncovered = set(cfg.get("uncovered_by_design", []))
+
+    per_muscle = {m: 0 for m in MUSCLES}
+    day_sets = {}
+    for day in WEEKDAYS:
+        n = 0
+        for p in plan["week"][day]["plan"]:
+            n += p["sets"]
+            for m in lib[p["exercise"]]["muscles"]:
+                per_muscle[m] += p["sets"]
+        day_sets[day] = n
+
+    week = sum(day_sets.values())
+    days = sum(1 for d in WEEKDAYS if day_sets[d])
+    freq = cfg["athlete"]["sessions_per_week"]
+    band = cfg["athlete"].get("session_sets") or {"min": 10, "max": 12}
+    per_session = round(week / freq, 1) if freq else None
+
+    muscles = []
+    for m in MUSCLES:
+        n = per_muscle[m]
+        f = "UNCOVERED" if m in uncovered else flag(n, bands[m])
+        muscles.append({"muscle": m, "planned": n, "band": bands[m], "flag": f})
+    return {"plan": pid, "plan_name": plan["name"], "sets_per_week": week,
+            "planned_days": days, "day_sets": day_sets,
+            "sessions_per_week": freq, "session_sets_band": band,
+            "sets_per_session": per_session,
+            # The verdict, computed once here so the CLI and the app cannot disagree.
+            "verdict": None if per_session is None
+                       else "in band" if band["min"] <= per_session <= band["max"]
+                       else "over" if per_session > band["max"] else "under",
+            "multiple": None if per_session is None or not band["max"]
+                        else round(per_session / band["max"], 1),
+            "muscles": muscles,
+            "uncovered_in_plan": [m["muscle"] for m in muscles
+                                  if m["planned"] == 0 and m["muscle"] not in uncovered]}
+
+
+def print_coverage(c: dict) -> None:
+    print(f"PLAN COVERAGE  {c['plan_name']}  ({c['plan']})")
+    print("-" * 62)
+    v = c["verdict"]
+    if v:
+        b = c["session_sets_band"]
+        tag = {"in band": "inside", "over": "ABOVE", "under": "below"}[v]
+        print(f"  {c['sets_per_week']} sets/week over {c['sessions_per_week']} sessions "
+              f"= {c['sets_per_session']}/session, {tag} the {b['min']}-{b['max']} design"
+              + (f" ({c['multiple']}x the top of it)" if v == "over" else ""))
+    print(f"  {c['planned_days']} of 7 weekdays carry work: " +
+          " ".join(f"{d}{c['day_sets'][d]}" for d in WEEKDAYS))
+    print("-" * 62)
+    for m in c["muscles"]:
+        b = m["band"]
+        print(f"  {m['muscle']:<13}{m['planned']:>4} planned   band {b['min']:>3}-{b['max']:<3} "
+              f" {m['flag']}")
+    if c["uncovered_in_plan"]:
+        print(f"\n  NO DAY TRAINS: {', '.join(c['uncovered_in_plan'])}")
+        print("  A muscle at 0 here cannot be fixed by training harder - the week does")
+        print("  not ask for it. That is a routine edit, not an adherence problem.")
+
+
 def print_plans(routine: dict, rows: list[Set]) -> None:
     print("PLANS")
     last = max((s.date for s in rows), default=None)
@@ -1171,6 +1246,7 @@ def analytics_json(rows, routine, lib, cfg) -> dict:
         "adherence": adherence(rows, routine, lib, cfg),
         "prescriptions": {e: prescribe(rows, e, lib, cfg) for e in lifts},
         "active_plan": routine["active"],
+        "coverage": plan_coverage(routine, lib, cfg),
         "plans": {pid: {"name": p["name"],
                         "week": {d: {"name": p["week"][d]["name"], "plan": p["week"][d]["plan"]}
                                  for d in WEEKDAYS}}
@@ -1189,7 +1265,7 @@ def analytics_json(rows, routine, lib, cfg) -> dict:
 
 COMMANDS = ["validate", "volume", "today", "prescribe", "progression", "index",
             "bridge", "stalls", "balance", "adherence", "report", "json",
-            "plans", "bands"]
+            "plans", "bands", "coverage"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1262,6 +1338,7 @@ def main(argv: list[str] | None = None) -> int:
             print_adherence(adherence(rows, routine, lib, cfg))
         elif args.command == "report":
             print_plans(routine, rows); print()
+            print_coverage(plan_coverage(routine, lib, cfg)); print()
             print_volume(volume_report(rows, lib, cfg, 7, routine)); print()
             print_adherence(adherence(rows, routine, lib, cfg)); print()
             print_index(strength_index(rows, lib, cfg)); print()
@@ -1270,6 +1347,8 @@ def main(argv: list[str] | None = None) -> int:
             print_balance(balance_ratios(rows, lib, cfg))
         elif args.command == "plans":
             print_plans(routine, rows)
+        elif args.command == "coverage":
+            print_coverage(plan_coverage(routine, lib, cfg, args.plan))
         elif args.command == "bands":
             pid = args.plan or routine["active"]
             print_bands(pid, derive_bands(plan_of(routine, pid), lib, cfg))

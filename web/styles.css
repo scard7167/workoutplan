@@ -649,3 +649,33 @@ body.haslogbar main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); 
 [hidden] { display: none !important; }
 .logbtn.dim { background: var(--panel-2); border: 1px solid var(--line-2); color: var(--muted);
   cursor: not-allowed; font-weight: 500; font-size: 14px; }
+
+/* ------------------------------------------------------- plan coverage strip
+   Seven-second scan of what the WEEK asks for per muscle, against the same bands
+   Trends measures the log against. Colour is status only, never identity. */
+.covlab { font: 500 9.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted); margin: 2px 0 7px; }
+.covstrip { display: flex; gap: 3px; margin: 0 0 12px; overflow-x: auto;
+  -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+.covcell {
+  flex: 1 0 auto; min-width: 42px; padding: 7px 4px 6px; border-radius: 6px;
+  background: var(--panel); border: 1px solid var(--line);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.covn { font: 600 14px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.covm { font: 400 8.5px/1 var(--mono); letter-spacing: .04em; color: var(--muted); }
+.covcell.GREEN { border-color: rgba(95,191,107,.5); }
+.covcell.GREEN .covn { color: var(--good); }
+.covcell.AMBER { border-color: rgba(224,163,46,.5); }
+.covcell.AMBER .covn { color: var(--warn); }
+.covcell.RED { border-color: rgba(217,82,74,.6); }
+.covcell.RED .covn { color: var(--crit); }
+.covcell.UNCOVERED { border-style: dashed; }
+.covcell.UNCOVERED .covn { color: var(--muted); }
+
+/* The row's right-hand label. It read as "- x 4" and was mistaken for a stepper and a
+   remove button by a reviewer; a unit and a word cannot be. */
+.rxu { font: 400 10px var(--sans); color: var(--muted); margin-left: 2px; }
+
+#plan-verdict .callout:last-child { margin-bottom: 12px; }
+.planrenamewrap { margin-top: 10px; }
