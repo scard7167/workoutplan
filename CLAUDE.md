@@ -440,6 +440,21 @@ now quads are trained directly.
   stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
   lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
   of Trends because a plan changed is a bug, not a filter.
+- **A design change may not move or hide a control.** It may reorder cards, retype a
+  label, restyle a component, or ADD a readout. It may not demote what someone reaches
+  for by habit, and it may not change the interaction model - those are product changes
+  and have to be asked for in those words. A UX review saying "remove X" is evidence X
+  is badly placed, not permission to move it. Learned by doing it wrong: a review was
+  implemented as two eight-item passes, Today became a one-set-at-a-time view with the
+  flat list behind a tap, and the whole thing was reverted. Work a review ITEM BY ITEM,
+  agreeing each before building it.
+- **A file input is never inside a hidden container.** Off-screen and in layout, always.
+  A file input inside `[hidden]` or `display:none` does not reliably open the picker on
+  iOS, even behind its label. This has broken once.
+- **`[hidden]` needs an explicit rule in `styles.css`.** The published Artifact's wrapper
+  supplies `[hidden]{display:none!important}`; a local copy of the page does not, so a
+  `display:flex` element ignores the attribute entirely and a local test disagrees with
+  the bundle.
 - **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
   will pass a module-level syntax error that stops the whole page loading. Use
   `node --input-type=module --check < web/app.js`, and load the page in a browser and

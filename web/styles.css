@@ -504,3 +504,8 @@ button.primary, .actions button {
   font: 400 13px var(--sans);
 }
 .planrenamewrap input:focus { border-color: var(--accent); outline: none; }
+
+/* The artifact wrapper supplies [hidden]{display:none!important}; a local copy of the
+   page does not, so a display:flex/grid element would ignore the attribute entirely.
+   Stated here so both copies behave the same. */
+[hidden] { display: none !important; }
