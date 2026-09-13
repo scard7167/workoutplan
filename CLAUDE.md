@@ -26,9 +26,7 @@ the week's only hip hinge. No muscle lost its last lift (checked before the swap
 three of Saturday's four machines repeat Wednesday's leg day three days later, and TWO
 BALANCE BANDS NOW FAIL AS WRITTEN: quad:hamstring 16:4 = 4.00 against a max of 1.5, and
 upper:lower 120:40 = 3.00 against a floor of 4.0. Those bands were deliberately NOT
-widened - see the comments in config.yaml. The week is still 156 sets, which the Plan
-tab now states as 22.3 sets per session against the 10-12 the routine was designed
-around - 1.9x, printed on the screen rather than left in this file.
+widened - see the comments in config.yaml. The week is still 156 sets.
 
 ## Files
 
@@ -151,57 +149,6 @@ sessions in the last 7 days, the two biggest volume gaps, suggested focus. Then 
 Never open a new session while `current_session.md` exists - ask whether to commit
 (`/end`) or discard it.
 
-### Logging in the web app
-
-**2026-09-13: the DEFAULT view is the app as it was built.** The first UX pass made
-Today a focus view and demoted the flat list, the photo dump, the plan settings and the
-per-lift ledger behind taps. The result read as a replaced app rather than a redesigned
-one, and the user said so. **Relocating someone's controls is not a design change.** So
-every one of those defaults was flipped back: Today opens on the flat list with its
-weight boxes and set-count steppers, Plan opens with the photo dump and settings
-expanded, Trends opens with the ledger expanded and the KPI row visible.
-
-What the review proposed is still all there - as a CONTROL you reach for, never a layout
-imposed. `focus one set at a time` on Today turns the focus view on; it is off by
-default and persisted per session.
-
-**The weight box takes the chat grammar**: `60`, `60@2`, `60x8`, `60x8 @2`. That is how
-reps and RIR reach the default view without a single new control or a changed row -
-adding a stepper to all sixteen slots would have been another layout imposed rather than
-a capability offered. `parseSlot()` accepts the same shapes the chat logger does, so
-there is one grammar for a set in this app and not two. Typing just a weight behaves
-exactly as it always did.
-
-**Focus mode**, when on: exactly one set is in play. The card carries the
-prescription as the hero, last session's same-numbered set beneath it, three steppers
-(weight / reps / RIR) for the days you deviate, and ONE bottom-anchored 52px action that
-logs the set, starts the rest timer and advances to the next slot. The rest of the day
-collapses to one tappable line each; `swap exercise` jumps to the next lift and is not
-optional - a single-exercise view is worse than a flat list the moment a machine is taken.
-
-**RIR IS NOW ENTERED, and that is a rule change.** The app logged a blank RIR by design,
-which meant nothing typed on the phone could ever move a prescription: rule 2 needs
-RIR <= 2 and rule 1 needs RIR 0. It still DEFAULTS to blank, because unverified is not
-proven - but the card states the consequence (`RIR blank -> the load will hold`) rather
-than leaving it to be discovered. The RIR stepper cycles blank -> 0 -> 1 -> 2 -> 3 -> 4 ->
-blank: blank is a value here, not an absence to skip past.
-
-A day with logged sets is still HISTORY and still renders the flat read-only list - a
-record is not an entry form.
-
-**In focus mode the flat list is collapsed, never removed** (`full session`). Two things only it can do,
-and hiding it outright broke both: correcting an arbitrary slot, and the set-count stepper
-that Today shares with Plan - "set counts are changed from EITHER tab" is a documented
-invariant and the first version of this change silently violated it. It captures a weight
-only, so reps fall back to the target and RIR stays blank there.
-
-`state.focus`, `state.rest` and `state.showFull` are all persisted with the session, and
-the toggle SAVES on click - a reload that re-collapses the list loses the place you were
-at, which is exactly what the tests caught.
-
-The rest timer belongs to the SESSION, not the page: it is persisted with the sets, so
-locking the phone between sets does not reset it.
-
 ### Logging - every message during a session is a set
 Exercise is **sticky**: once named, every following message belongs to it until a new
 exercise is named or `swap to X` is used.
@@ -283,10 +230,6 @@ recomputes a deep metric in JavaScript.
 - `python3 analyze.py plans` - every plan, its lifts and weekly sets, and which is active
 - `python3 analyze.py bands [--plan ID]` - the volume bands a plan DELIVERS, as a block
   to paste into `config.yaml`. Bands are derived from the plan they measure, never guessed
-- `python3 analyze.py coverage [--plan ID]` - what the plan SCHEDULES per muscle against
-  its band, plus the headline judged against `athlete.session_sets`. No log involved:
-  this asks whether the week even asks for the work, which `volume` cannot answer. A
-  muscle at 0 here is a routine edit, never an adherence problem
 - `python3 analyze.py report` - all of the above, in order
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
@@ -407,51 +350,6 @@ without any repo round-trip; only some edits additionally need to be EXPORTED.
   `routine.yaml` it was made against, and IS dropped when a newer one ships - the Plan
   tab says so out loud rather than letting it vanish unannounced.
 
-### What the Plan tab leads with
-
-**A verdict, not a count.** `156 sets / week` means nothing until it is divided by the
-sessions meant to absorb it, so the headline is followed by `156 over 7 sessions = 22.3
-per session, 1.9x the top of the 10-12 design`. Judged against
-`athlete.sessions_per_week` and `athlete.session_sets` in `config.yaml` - held in ONE
-place and read in one place, which is the drift the UX review warned about.
-
-It is judged against the frequency RECORDED, never an inferred one. The review's mock
-asserted "7 planned days, you train 3"; this log has no trained-day data to infer that
-from, and `adherence` is the thing that reports it honestly once sessions land.
-
-**A coverage strip**: planned sets per muscle against the same bands Trends measures the
-log against. `uncovered_by_design` shows dashed, never RED. A muscle at 0 gets its own
-callout, because it cannot be fixed by training harder - the week does not ask for it,
-which is a different problem from a missed session and needs saying differently.
-
-`plan_coverage()` in `analyze.py` is the canonical implementation; `planCoverage()` in
-`web/app.js` mirrors it over `effectivePlan()` so a plan edited on the phone and not yet
-exported is judged too. Same arrangement, and same reason, as the progression rule and
-today's volume.
-
-### Collapsed, never cut
-
-The photo dump, the plan rename plus the sync/export note, and the editing fine print
-all have a disclosure control - but they are **OPEN by default**, as they were. The
-review said remove them; the first pass collapsed them; both were wrong, because a
-control you have to find is not the same control. The disclosure exists so YOU can
-collapse them, not so the app can.
-
-Two rules fall out of that and are load-bearing:
-
-- **The photo dump's `<input type="file">` lives OUTSIDE every collapsible region**, as a
-  direct child of the Plan panel. It is off-screen but IN LAYOUT on purpose: a file input
-  inside a `[hidden]` or `display:none` container does not reliably open the picker on
-  iOS, even behind its label. Collapsing the card around it is exactly how that would
-  regress, and it is the reason the card and the input are separated in the markup.
-- **A WARNING opens the section it lives in; an informational note does not.**
-  `renderPlanNote()` sets `data-warn` on the node, and only dropped edits or unexported
-  drift set it. Without that distinction the steady-state "your order is saved" line
-  opened the settings section on every render and the collapse never held.
-
-`scancard`, `plansettings` and `planhelp` state is NOT persisted - these are read once
-and closed, unlike the session's own `showFull`.
-
 ### Switching weekly plans on the phone
 
 The Plan tab carries one chip per plan; the selected one drives Today, the Plan tab and
@@ -490,28 +388,6 @@ devices like the order does.
   exercise - the chip says `not exported` and the export emits every plan plus a
   `schedule` entry for the selected one. The export also reminds you to derive the new
   plan's bands, because nothing else will.
-
-### What Trends leads with
-
-**Sets per muscle against the band is the first card**, because it is the question the
-screen exists to answer. It used to sit BELOW a 29-row per-lift ledger, which put the
-primary requirement under a list that says nothing until weeks of data exist.
-
-- the **missed-muscle callout** sits above the bars and names the exception in words. A
-  red bar says a muscle is low; the callout says which, by how much, and - the actionable
-  half - whether the plan even covers it. `no day in the plan trains it` and `the plan
-  schedules N/wk, the sessions have not happened` need different fixes, so they are
-  worded apart. `uncovered_by_design` muscles are excluded: calves are a decision, not a
-  deficit.
-- **stalls are capped at three rows** with a count of the rest. Exception reporting, not
-  a ledger.
-- the **per-lift ledger and the KPI row stay expanded.** The review wanted both demoted;
-  hiding a component is a cut, not a design change, so only the card ORDER moved.
-
-Bands stay per-muscle and DERIVED from the routine. The review proposed a flat 10-20
-shaded band for every muscle; that would be wrong here and is not what was built -
-hamstrings target 4 and lats 24 in the current plan, and a flat band would call both
-wrong.
 
 ### Provisional exercises
 
@@ -564,23 +440,6 @@ now quads are trained directly.
   stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
   lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
   of Trends because a plan changed is a bug, not a filter.
-- **A file input is never inside a hidden container.** Off-screen and in layout, always,
-  or iOS silently refuses to open the picker. This has broken once already.
-- **A design change may not move or hide a control.** It may reorder cards, retype a
-  label, restyle a component, or ADD a readout. It may not demote what someone reaches
-  for by habit, and it may not change the interaction model - those are product changes
-  and need asking for in those words. A UX review that says "remove X" is evidence X is
-  badly placed, not permission to move it. `scratchpad/nocut.mjs` enumerates every
-  control across the three tabs and `scratchpad/default.mjs` asserts what the app opens
-  ON; both are standing guards, and the second exists because the first was not enough.
-- **A focus view must never be the ONLY way in.** Today shows one set at a time, but the
-  full flat list stays one tap away: a single-exercise view is worse than a list the
-  moment a machine is taken, and the set-count stepper Today shares with Plan lives in
-  that list. Removing the fallback is how that invariant got broken once already.
-- **`[hidden]` needs an explicit rule in `styles.css`.** The published Artifact's wrapper
-  supplies `[hidden]{display:none!important}`; a local copy of the page does not, so a
-  `display:flex` element ignores the attribute entirely. A local test passes while the
-  bundle differs, or worse, the other way round.
 - **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
   will pass a module-level syntax error that stops the whole page loading. Use
   `node --input-type=module --check < web/app.js`, and load the page in a browser and

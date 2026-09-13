@@ -73,7 +73,6 @@ EX_JSON = json.dumps(ex, separators=COMPACT)
 BAND_JSON = json.dumps(cfg["volume_targets"], separators=COMPACT)
 METRIC_JSON = json.dumps(cfg["metrics"], separators=COMPACT)
 PROG_JSON = json.dumps(cfg["progression"], separators=COMPACT)
-ATHLETE_JSON = json.dumps(cfg["athlete"], separators=COMPACT)
 ROUTINE_JSON = json.dumps(routine, separators=COMPACT)
 PLANS_JSON = json.dumps(PLANS, separators=COMPACT)
 SCHEDULE_JSON = json.dumps(SCHEDULE, separators=COMPACT)
@@ -91,7 +90,6 @@ out = (f"// GENERATED from exercises.yaml, config.yaml, routine.yaml, {LOG_NAME}
        f"export const UNCOVERED = {UNCOVERED_JSON};\n\n"
        f"export const METRICS = {METRIC_JSON};\n\n"
        f"export const PROGRESSION = {PROG_JSON};\n\n"
-       f"export const ATHLETE = {ATHLETE_JSON};\n\n"
        f"export const ROUTINE = {ROUTINE_JSON};\n\n"
        f"export const PLANS = {PLANS_JSON};\n\n"
        f"export const SCHEDULE = {SCHEDULE_JSON};\n\n"

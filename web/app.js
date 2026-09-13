@@ -14,7 +14,7 @@
 // this session can no longer tell "hit the target" from "missed it," so a deload can
 // never be triggered from a Today-logged set. That trade is deliberate, made once here,
 // not something to silently work around elsewhere.
-import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ATHLETE, ROUTINE,
+import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE,
          PLANS, SCHEDULE, ACTIVE_PLAN, BANDS_BY_PLAN, ANALYTICS, SEED_LOG,
          BUILD } from "./data.js";
 
@@ -51,20 +51,6 @@ const state = {
   orderAt: null,     // when this device last changed either of them
   orderDirty: false, // changed but not yet in the store
   pick: null,            // the row tap-to-move has picked up, if any
-  focus: null,           // {exercise, setNo} - the set being entered right now
-  entry: null,           // {weight, reps, rir} - its editable values
-  rest: null,            // epoch ms the rest timer started, or null
-  showLifts: true,       // the per-lift ledger - expanded, as it was
-  // 2026-09-13: every one of these defaults was flipped back. The UX review said to
-  // demote these and the first pass did - and the result was an app that felt replaced
-  // rather than redesigned. Relocating someone's controls is not a design change. So the
-  // DEFAULT is the app as it was built, and everything the review proposed is a control
-  // you can reach for rather than a layout imposed on you.
-  focusMode: false,      // one-set-at-a-time view. OFF: the flat list is Today.
-  showFull: true,        // the flat session list - the primary view again
-  showScan: true,        // the photo dump, open as it was
-  showSettings: true,    // plan rename + sync note, open as it was
-  showHelp: true,        // the editing fine print, open as it was
   plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
   planName: {},          // renames and new plans this device made, id -> name
   routineBy: {},         // structural edits, per plan
@@ -330,343 +316,6 @@ function sparkline(values, w = 120, h = 26) {
     `<circle cx="${last[0]}" cy="${last[1]}" r="2" fill="var(--accent)"/></svg>`;
 }
 
-// ----------------------------------------------------- the focused set
-// Today is used one-handed with a barbell nearby, so exactly one set is in play at a
-// time: the prescription is the hero, last session sits under it as the number actually
-// reasoned about mid-set, and the steppers are there for the days you deviate. Everything
-// else on the screen is reference material.
-//
-// RIR IS ASKED FOR NOW, and that is a rule change, not a cosmetic one: the progression
-// rule needs RIR <= 2 to add load and RIR 0 to deload, so while the app logged a blank
-// RIR nothing typed here could ever move a prescription. It still DEFAULTS to blank -
-// "unverified is not proven" - but the consequence is stated on the card rather than
-// buried, so a held load is a choice instead of a surprise.
-
-const REST_TARGET = 120;          // seconds; the bar turns accent past this
-
-// The set to enter: the first slot of the focused lift that has nothing logged, else its
-// last slot so a finished lift can still be corrected.
-function nextSetNo(exercise) {
-  const p = viewPlan().find(x => x.exercise === exercise);
-  const done = loggedFor(exercise);
-  return Math.min(done + 1, slotCount(p || { sets: 1, exercise }));
-}
-
-// Default focus: the first lift of the day that is not finished. Falls back to the last
-// one so the card never disappears on a completed session.
-function defaultFocus() {
-  const plan = viewPlan();
-  if (!plan.length) return null;
-  const open = plan.find(p => loggedFor(p.exercise) < p.sets && exReady(p.exercise));
-  const p = open || plan[plan.length - 1];
-  return { exercise: p.exercise, setNo: nextSetNo(p.exercise) };
-}
-
-function focusRow() {
-  return setsShown(state.focus?.exercise || "")
-    .find(r => r.set_no === state.focus?.setNo) || null;
-}
-
-// Prefill, in order of what the number should be:
-//   1. the set itself, if already logged - so it can be corrected
-//   2. the last set of this lift IN THIS SESSION - prescribe() reads committed history
-//      and cannot see an unsubmitted set, so without this, set 2 of a brand-new lift
-//      prefilled as "-" immediately after set 1 went in at 45 kg
-//   3. the progression rule
-// Never a round number, never last week's.
-function setFocus(exercise, setNo) {
-  if (!exercise) { state.focus = null; state.entry = null; return; }
-  state.focus = { exercise, setNo: setNo || nextSetNo(exercise) };
-  const shown = setsShown(exercise);
-  const had = shown.find(r => r.set_no === state.focus.setNo);
-  const rx = prescribe(exercise);
-  const sameSession = [...shown].sort((a, b) => b.set_no - a.set_no)[0];
-  state.entry = had
-    ? { weight: +had.weight_kg, reps: had.reps, rir: had.rir ?? null }
-    : sameSession
-      ? { weight: +sameSession.weight_kg, reps: rx.target_reps ?? sameSession.reps, rir: null }
-      : { weight: rx.weight_kg, reps: rx.target_reps, rir: null };
-  state.sticky = exercise;
-}
-
-function ensureFocus() {
-  const plan = viewPlan();
-  // A restored focus keeps its set; only the ENTRY is re-prefilled. state.entry is
-  // derived and deliberately not persisted, so after a reload the focus is valid while
-  // the entry is null - reading e.weight there is what blanked the whole card.
-  if (state.focus && plan.some(p => p.exercise === state.focus.exercise)) {
-    if (!state.entry) setFocus(state.focus.exercise, state.focus.setNo);
-    return;
-  }
-  const d = defaultFocus();
-  d ? setFocus(d.exercise, d.setNo) : setFocus(null);
-}
-
-// -------------------------------------------------------------- rest timer
-let restTick = null;
-const restSeconds = () => state.rest ? Math.floor((Date.now() - state.rest) / 1000) : 0;
-const mmss = (t) => `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`;
-
-function startRest() {
-  state.rest = Date.now();
-  saveSession();
-  renderRest();
-  if (!restTick) restTick = setInterval(renderRest, 1000);
-}
-function stopRest() {
-  state.rest = null;
-  if (restTick) { clearInterval(restTick); restTick = null; }
-  saveSession();
-  renderRest();
-}
-function renderRest() {
-  const el = $("restbar");
-  if (!el) return;
-  // A timer restored from a reload has no interval behind it yet - without this it sits
-  // frozen on whatever second the page happened to load on.
-  if (state.rest && !restTick && dayEditable()) restTick = setInterval(renderRest, 1000);
-  if (!state.rest || !dayEditable()) {
-    el.hidden = true;
-    if (restTick && !state.rest) { clearInterval(restTick); restTick = null; }
-    return;
-  }
-  const t = restSeconds();
-  el.hidden = false;
-  el.className = "restbar" + (t >= REST_TARGET ? " ready" : "");
-  el.innerHTML =
-    `<span class="restlab">rest</span><span class="restval">${mmss(t)}</span>` +
-    `<span class="resttarget">${t >= REST_TARGET ? "ready" : `of ${mmss(REST_TARGET)}`}</span>` +
-    `<button class="restskip" data-role="restskip">skip</button>`;
-  el.querySelector('[data-role="restskip"]').onclick = stopRest;
-}
-
-// ------------------------------------------------------- focus rendering
-const stepBtn = (role, sign, aria) =>
-  `<button class="fstep" data-role="${role}" aria-label="${aria}">${sign}</button>`;
-
-function renderFocus() {
-  const card = $("focuscard"), next = $("upnext"), bar = $("logbar");
-  if (!card) return;
-  // Focus mode is for the day being LOGGED. A history day is a record, not an entry
-  // form, so it keeps the flat read-only list and this whole layer stays out of the way.
-  if (!dayEditable() || dayIsHistory()) {
-    card.innerHTML = ""; next.innerHTML = "";
-    if (bar) bar.hidden = true;
-    document.body.classList.remove("haslogbar");
-    $("today-plan").hidden = false;
-    const fb0 = $("btn-full"); if (fb0) fb0.hidden = true;
-    const tg0 = $("btn-focusmode"); if (tg0) tg0.hidden = true;
-    return;
-  }
-  // Focus mode is a CHOICE. Off, Today renders exactly as it did before the UX passes:
-  // the flat list, the weight boxes, the set-count steppers, no card and no fixed bar.
-  const toggle = $("btn-focusmode");
-  if (toggle) {
-    toggle.hidden = false;
-    toggle.innerHTML = state.focusMode
-      ? "back to the full list" : "focus one set at a time";
-    toggle.setAttribute("aria-pressed", String(state.focusMode));
-    toggle.onclick = () => {
-      state.focusMode = !state.focusMode;
-      state.showFull = !state.focusMode;
-      saveSession(); renderToday();
-    };
-  }
-  if (!state.focusMode) {
-    card.innerHTML = ""; next.innerHTML = "";
-    if (bar) bar.hidden = true;
-    document.body.classList.remove("haslogbar");
-    $("today-plan").hidden = false;
-    const fbx = $("btn-full"); if (fbx) fbx.hidden = true;
-    return;
-  }
-  ensureFocus();
-  if (!state.focus) {
-    card.innerHTML = `<p class="empty">Nothing planned for this day.</p>`;
-    next.innerHTML = ""; if (bar) bar.hidden = true;
-    document.body.classList.remove("haslogbar");
-    $("today-plan").hidden = false;
-    const fb1 = $("btn-full"); if (fb1) fb1.hidden = true;
-    return;
-  }
-  // Collapsed, not gone. Everything the flat list can do that the focus card cannot -
-  // correcting an arbitrary slot, and the set-count stepper Today shares with Plan - is
-  // one tap away rather than removed.
-  const fb = $("btn-full");
-  if (fb) {
-    fb.hidden = false;
-    fb.textContent = state.showFull ? "hide the full session" : "full session";
-    fb.setAttribute("aria-expanded", String(state.showFull));
-    fb.onclick = () => { state.showFull = !state.showFull; saveSession(); renderToday(); };
-  }
-  $("today-plan").hidden = !state.showFull;
-
-  const ex = state.focus.exercise, setNo = state.focus.setNo;
-  const plan = viewPlan();
-  const p = plan.find(x => x.exercise === ex) || { exercise: ex, sets: 1 };
-  const total = slotCount(p);
-  const rx = prescribe(ex);
-  const e = state.entry;
-  const ready = exReady(ex);
-  const img = LIB[ex]?.image;
-  const done = setsShown(ex).sort((a, b) => a.set_no - b.set_no);
-  const prior = priorSession(ex);
-  // The set number from the SAME position last session - the comparison the feedback
-  // contract makes, and the one worth reading mid-set.
-  const priorSet = prior?.find(r => r.set_no === setNo) || prior?.[0] || null;
-
-  card.innerHTML = `
-    <div class="fcard ${ready ? "" : "unset"}">
-      <div class="fhead">
-        ${img ? `<button class="thumb fthumb" data-role="fimg" data-img="${img}"
-             aria-label="Show ${label(ex)} photo"><img src="${img}" alt=""></button>` : ""}
-        <div class="fname">
-          <span class="fn">${label(ex)}</span>
-          <span class="fset">set ${setNo} of ${total}</span>
-        </div>
-      </div>
-      ${ready ? `
-      <div class="fhero">
-        <span class="fw">${fmtW(e.weight, ex)}</span><span class="fu">kg</span>
-        <span class="fx">&times;</span>
-        <span class="fr">${e.reps}</span>
-        ${e.rir === null ? `<span class="frirnone">rir &ndash;</span>`
-                         : `<span class="frir">@${e.rir}</span>`}
-      </div>
-      <div class="flast">${priorSet
-        ? `last time  ${fmtSet(priorSet)}`
-        : rx.reason === "no baseline"
-          ? `no baseline &middot; first time on this lift`
-          : `no baseline &middot; ${rx.reason}`}</div>
-      <div class="fsteps">
-        <div class="fstepgrp">${stepBtn("wdn", "&minus;", "less weight")}
-          <span class="fsl">kg</span>${stepBtn("wup", "+", "more weight")}</div>
-        <div class="fstepgrp">${stepBtn("rdn", "&minus;", "fewer reps")}
-          <span class="fsl">reps</span>${stepBtn("rup", "+", "more reps")}</div>
-        <div class="fstepgrp">${stepBtn("idn", "&minus;", "lower rir")}
-          <span class="fsl">rir</span>${stepBtn("iup", "+", "higher rir")}</div>
-      </div>
-      <div class="fnote">${e.rir === null
-        ? `RIR blank &rarr; the load will <b>hold</b>. Set it to move the prescription.`
-        : e.rir <= PROGRESSION.rir_ceiling
-          ? `RIR ${e.rir} on every set at ${LIB[ex].rep_range[1]} reps adds an increment next time.`
-          : `RIR ${e.rir} holds the load and adds a rep.`}</div>
-      ${done.length ? `<div class="fdone">${done.map(r =>
-        `<button class="fchip ${r.set_no === setNo ? "on" : ""}" data-role="chip"
-           data-set="${r.set_no}">${r.set_no}<span>${fmtW(r.weight_kg, ex)}</span></button>`
-        ).join("")}</div>` : ""}
-      <button class="fswap" data-role="swap">swap exercise &middot; machine taken</button>
-      ` : `<p class="fnote crit">${label(ex)} has no increment or rep range yet &mdash;
-             set them in Plan. The rule will not invent one.</p>`}
-    </div>`;
-
-  // up next: the rest of the day, collapsed to one tappable line each
-  const rest = plan.filter(x => x.exercise !== ex);
-  next.innerHTML = rest.length ? `
-    <div class="uplab">up next</div>
-    <div class="uplist">${rest.map(x => {
-      const n = loggedFor(x.exercise), full = n >= x.sets;
-      return `<button class="uprow ${full ? "done" : ""}" data-role="up" data-ex="${x.exercise}">
-        <span class="un">${label(x.exercise)}</span>
-        <span class="us">${full ? `${n} logged` : n ? `${n}/${x.sets} sets` : `${x.sets} sets`}</span>
-      </button>`;
-    }).join("")}</div>` : "";
-
-  if (bar) {
-    bar.hidden = !ready;
-    document.body.classList.toggle("haslogbar", ready);
-    // A lift with no history and no prescription has no weight to offer. Saying so on
-    // the button beats "Log - x 8" and a refusal after the tap.
-    const noWeight = e.weight === null || e.weight === undefined;
-    if (ready) bar.innerHTML = noWeight
-      ? `<button class="logbtn dim" id="btn-log" disabled>set a weight to log</button>`
-      : `<button class="logbtn" id="btn-log">Log ${fmtW(e.weight, ex)} &times; ${e.reps}` +
-        `${e.rir === null ? "" : ` @${e.rir}`}</button>`;
-  }
-  wireFocus();
-}
-
-function wireFocus() {
-  const ex = state.focus.exercise, e = state.entry;
-  const inc = LIB[ex]?.increment || 2.5;
-  const [floor, ceiling] = LIB[ex]?.rep_range || [1, 30];
-  const bump = (patch) => { Object.assign(state.entry, patch); renderFocus(); };
-  const q = (r) => document.querySelector(`[data-role="${r}"]`);
-  const on = (r, fn) => { const el = q(r); if (el) el.onclick = fn; };
-
-  const w0 = e.weight === null || e.weight === undefined ? 0 : e.weight;
-  on("wup", () => bump({ weight: +(w0 + inc).toFixed(4) }));
-  on("wdn", () => bump({ weight: Math.max(0, +(w0 - inc).toFixed(4)) }));
-  on("rup", () => bump({ reps: e.reps + 1 }));
-  on("rdn", () => bump({ reps: Math.max(1, e.reps - 1) }));
-  // RIR cycles blank -> 0 -> 1 -> 2 -> 3 -> 4 -> blank. Blank is a real value here, not
-  // an absence to be skipped past: it is what "I did not judge it" records as.
-  on("iup", () => bump({ rir: e.rir === null ? 0 : e.rir >= 4 ? null : e.rir + 1 }));
-  on("idn", () => bump({ rir: e.rir === null ? 4 : e.rir <= 0 ? null : e.rir - 1 }));
-  on("swap", () => {
-    const plan = viewPlan();
-    const i = plan.findIndex(x => x.exercise === ex);
-    const nxt = plan[(i + 1) % plan.length];
-    if (nxt && nxt.exercise !== ex) { setFocus(nxt.exercise); saveSession(); renderToday(); }
-  });
-  const fimg = q("fimg");
-  if (fimg) fimg.onclick = () => openLightbox(fimg.dataset.img);
-  for (const c of document.querySelectorAll('[data-role="chip"]'))
-    c.onclick = () => { setFocus(ex, +c.dataset.set); saveSession(); renderToday(); };
-  for (const u of document.querySelectorAll('[data-role="up"]'))
-    u.onclick = () => { setFocus(u.dataset.ex); saveSession(); renderToday(); };
-  const btn = $("btn-log");
-  if (btn) btn.onclick = logFocused;
-}
-
-// One tap: writes the set, starts the rest timer, advances to the next slot. The whole
-// point of the redesign is that this is the only thing you have to hit.
-function logFocused() {
-  const ex = state.focus.exercise, setNo = state.focus.setNo, e = state.entry;
-  const guard = logGuard(ex);
-  if (guard) return showFeedback(guard);
-  const lib = LIB[ex];
-  if (e.weight === null || e.weight === undefined)
-    return showFeedback(`<span class="err">? no weight set for ${label(ex)}</span>\n` +
-      `<span class="hint">there is no history and no prescription yet - use the kg ` +
-      `stepper. The rule will not invent a first load.</span>`);
-  if (e.weight === 0 && !lib.bodyweight)
-    return showFeedback(`<span class="err">? weight 0 but ${label(ex)} is not bodyweight</span>`);
-
-  const row = { exercise: ex, set_no: setNo, weight_kg: e.weight,
-                reps: e.reps, rir: e.rir };
-  const at = state.sets.findIndex(r => r.exercise === ex && r.set_no === setNo);
-  if (at === -1) state.sets.push(row); else state.sets[at] = row;
-  state.sessionDate = state.date;
-  state.sticky = ex;
-  showFeedback(feedback(row));
-
-  // Advance: next slot of this lift, else the next unfinished lift.
-  const p = viewPlan().find(x => x.exercise === ex);
-  if (setNo < slotCount(p || { sets: 1 })) setFocus(ex, setNo + 1);
-  else { const d = defaultFocus(); if (d) setFocus(d.exercise, d.setNo); }
-  startRest();
-  saveSession();
-  renderToday();
-}
-
-// Shared by the focus card and the flat boxes, so one set of refusals covers both.
-function logGuard(exercise) {
-  if (dayIsHistory())
-    return `<span class="err">? ${state.date} is already logged</span>\n` +
-      `<span class="hint">a logged day is history here. Correct it by saying so, one row ` +
-      `at a time - or remove the session in Trends and log it again.</span>`;
-  if (state.sets.length && state.sessionDate !== state.date)
-    return `<span class="err">? an unsubmitted session for ${state.sessionDate} is open</span>\n` +
-      `<span class="hint">Submit or Discard it before logging ${state.date}, so sets ` +
-      `cannot land on the wrong date.</span>`;
-  if (!LIB[exercise] || !exReady(exercise))
-    return `<span class="err">? ${label(exercise)} has no increment or rep range yet</span>\n` +
-      `<span class="hint">set them in Plan. Every row needs a rep target, and the rule ` +
-      `will not invent one.</span>`;
-  return null;
-}
-
 // ------------------------------------------------------------- TODAY view
 // Weight-only logging. Each exercise gets exactly `p.sets` input boxes - the count the
 // Plan tab set, and nothing in Today can change it. A slot's position IS its set_no;
@@ -824,9 +473,7 @@ function renderToday() {
     return `<li class="${cls}" data-ex="${p.exercise}">
       <div class="rowtop">
         <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-        <span class="rx ${top === null ? "" : "live"}">${top === null
-          ? `${p.sets} sets`
-          : `${headline}<span class="rxu">kg</span> &middot; ${p.sets} sets`}</span>
+        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
       </div>
       <span class="why ${history_ ? "" : rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
         history_
@@ -892,31 +539,12 @@ function renderToday() {
       };
     }
   }
-  renderFocus();
-  renderRest();
   renderSyncState();
 }
 
 // A slot's position IS its set_no - clearing it removes that logged row without
-// shifting any other slot. This is the FLAT path, kept for history days and as the
-// fallback when there is no focused set; the focus card is the primary way in and is
-// what asks for reps and RIR.
-// `60` | `60@2` | `60x8` | `60x8 @2` | `bw` -> {weight, reps|null, rir|null}
-// Deliberately the same shapes the chat logger accepts (see CLAUDE.md, Logging), so
-// there is one grammar for a set in this app and not two.
-function parseSlot(raw) {
-  const t = String(raw).trim().toLowerCase().replace(",", ".");
-  const m = t.match(/^(bw|\+?\d+(?:\.\d+)?)\s*(?:x\s*(\d+))?\s*(?:@\s*(\d))?$/);
-  if (!m) return null;
-  const weight = m[1] === "bw" ? 0 : parseFloat(m[1].replace("+", ""));
-  if (!Number.isFinite(weight) || weight < 0) return null;
-  const reps = m[2] ? parseInt(m[2], 10) : null;
-  if (reps !== null && reps < 1) return null;
-  const rir = m[3] === undefined ? null : parseInt(m[3], 10);
-  if (rir !== null && rir > 4) return null;
-  return { weight, reps, rir };
-}
-
+// shifting any other slot. Reps and RIR are never asked for: reps is always the
+// current prescribed target, RIR is always blank. See the file header for why.
 function commitSlot(exercise, setNo, raw) {
   const trimmed = raw.trim();
   const existing = state.sets.findIndex(s => s.exercise === exercise && s.set_no === setNo);
@@ -930,40 +558,44 @@ function commitSlot(exercise, setNo, raw) {
       `<span class="hint">was ${fmtSet(dropped)}</span>`);
   }
 
-  const guard = logGuard(exercise);
-  if (guard) { renderToday(); return showFeedback(guard); }
-  const ex = LIB[exercise];
-  // The box takes the SAME grammar the chat logger takes, so reps and RIR are enterable
-  // here without a single new control or a changed row: `60`, `60@2`, `60x8`, `60x8 @2`.
-  // Typing just a weight behaves exactly as it always did - reps fall back to the
-  // prescribed target and RIR stays blank, which the rule will not treat as proven.
-  // This is how the RIR the progression rule needs reaches the DEFAULT view: adding a
-  // stepper to all sixteen slots would have been another layout imposed rather than a
-  // capability offered.
-  const parsed = parseSlot(trimmed);
-  if (!parsed) {
+  if (dayIsHistory()) {
     renderToday();
     return showFeedback(
-      `<span class="err">? "${raw}" is not a weight</span>\n` +
-      `<span class="hint">60 &middot; 60@2 &middot; 60x8 &middot; 60x8 @2 - weight, then ` +
-      `optional xREPS and @RIR, the same as typing a set in chat.</span>`);
+      `<span class="err">? ${state.date} is already logged</span>\n` +
+      `<span class="hint">a logged day is history here. Correct it by saying so, one row ` +
+      `at a time - or remove the session in Trends and log it again.</span>`);
   }
-  const weight = parsed.weight;
+  if (state.sets.length && state.sessionDate !== state.date) {
+    renderToday();
+    return showFeedback(
+      `<span class="err">? an unsubmitted session for ${state.sessionDate} is open</span>\n` +
+      `<span class="hint">Submit or Discard it before logging ${state.date}, so sets ` +
+      `cannot land on the wrong date.</span>`);
+  }
+  const ex = LIB[exercise];
+  if (!ex || !exReady(exercise)) {
+    renderToday();
+    return showFeedback(
+      `<span class="err">? ${label(exercise)} has no increment or rep range yet</span>\n` +
+      `<span class="hint">set them in Plan. Every row needs a rep target, and the rule ` +
+      `will not invent one.</span>`);
+  }
+  const weight = parseFloat(trimmed.replace(",", "."));
+  if (!Number.isFinite(weight) || weight < 0) {
+    renderToday();
+    return showFeedback(`<span class="err">? "${raw}" is not a valid weight</span>`);
+  }
   if (weight === 0 && !ex.bodyweight) {
     renderToday();
     return showFeedback(`<span class="err">? weight 0 but ${label(exercise)} is not bodyweight</span>`);
   }
 
   const row = { exercise, set_no: setNo, weight_kg: weight,
-                reps: parsed.reps ?? prescribe(exercise).target_reps,
-                rir: parsed.rir };
+                reps: prescribe(exercise).target_reps, rir: null };
   if (existing === -1) state.sets.push(row); else state.sets[existing] = row;
   state.sessionDate = state.date;
   state.sticky = exercise;
   showFeedback(feedback(row));
-  // The timer is additive, not a relocation: it works from whichever view logged the
-  // set. Starting it only from the focus card would have made it a focus-mode feature.
-  startRest();
   renderToday();
   saveSession();
 }
@@ -1014,10 +646,6 @@ function flagOf(n, band, muscle) {
 }
 
 function renderKpis() {
-  // The review wanted this row gone until data exists. Hiding a component is a cut, not
-  // a design change, so it stays: its empty states are honest and it is where it was.
-  const kp = $("kpis");
-  if (kp) kp.hidden = false;
   const ix = ANALYTICS.index, ad = ANALYTICS.adherence, br = ANALYTICS.bridge;
   const vals = Object.values(ix.muscles).map(m => m.index).filter(v => v !== null);
   const prior = Object.values(ix.exercises).map(e => e.prior_index).filter(v => v !== null);
@@ -1061,21 +689,6 @@ function trendLifts() {
     for (const e of scheduledLifts(pid)) if (LIB[e] && !out.includes(e)) out.push(e);
   for (const r of history()) if (LIB[r.exercise] && !out.includes(r.exercise)) out.push(r.exercise);
   return out;
-}
-
-// The ledger is demoted, not deleted: every lift stays reachable, it just stops being
-// the first thing on the screen and stops repeating the same empty state 29 times before
-// a single session exists.
-function renderLiftDisclosure() {
-  const b = $("btn-lifts"), grid = $("liftgrid");
-  if (!b || !grid) return;
-  const n = trendLifts().length;
-  b.textContent = state.showLifts ? `hide the ${n} lifts` : `all ${n} lifts`;
-  b.setAttribute("aria-expanded", String(state.showLifts));
-  grid.hidden = !state.showLifts;
-  const d = $("liftdetail");
-  if (d) d.hidden = !state.showLifts;
-  b.onclick = () => { state.showLifts = !state.showLifts; renderLiftDisclosure(); };
 }
 
 function renderLiftGrid() {
@@ -1183,55 +796,6 @@ function renderMeters() {
     `load them and this log never sees it.`;
 }
 
-// A red bar says a muscle is low. This says WHICH muscles, by how much, and whether the
-// plan even covers them - which is the actionable half and the thing the bars cannot say.
-// Uncovered-by-design muscles are excluded: calves are not a deficit, they are a decision.
-function renderMissed() {
-  const el = $("missed");
-  if (!el) return;
-  const { counts } = volumeCounts(state.window);
-  const scale = state.window / 7;
-  const uncovered = new Set(UNCOVERED);
-  const planned = plannedByMuscle();
-  const low = MUSCLES
-    .filter(m => !uncovered.has(m) && BANDS[m].target > 0)
-    .map(m => ({ m, n: counts[m], min: BANDS[m].min * scale, plan: planned[m] || 0 }))
-    .filter(x => x.n < x.min)
-    .sort((a, b) => (a.n - a.min) - (b.n - b.min));
-
-  if (!ANALYTICS.sessions.length && !state.committed.length && !remoteRows().length) {
-    el.innerHTML = `<p class="callout flat">Nothing logged yet. Once a session lands, the
-      muscles below their band are named here rather than left to be spotted.</p>`;
-    return;
-  }
-  if (!low.length) {
-    el.innerHTML = `<p class="callout ok">Every muscle is inside its band over
-      ${state.window}d.</p>`;
-    return;
-  }
-  el.innerHTML = low.slice(0, 3).map(x => {
-    // The causal half: a muscle can be short because sessions were missed, or because
-    // no day in the plan trains it. Those need different fixes, so they are named apart.
-    const why = x.plan === 0
-      ? `no day in the plan trains it`
-      : `the plan schedules ${x.plan}/wk - the sessions have not happened`;
-    return `<p class="callout ${x.plan === 0 ? "crit" : "warn"}">
-      <b>${label(x.m)}</b> ${x.n} of ${Math.round(x.min)} minimum &middot; ${why}</p>`;
-  }).join("") + (low.length > 3
-    ? `<p class="callout flat">${low.length - 3} more below band.</p>` : "");
-}
-
-// Planned weekly sets per muscle, from the ACTIVE plan - the same effectivePlan() Today
-// and the Plan tab read, so the three cannot disagree about what was asked for.
-function plannedByMuscle() {
-  const out = {};
-  for (const d of DAYS)
-    for (const p of effectivePlan(d))
-      for (const m of (LIB[p.exercise]?.muscles || []))
-        out[m] = (out[m] || 0) + p.sets;
-  return out;
-}
-
 function renderBridge() {
   const b = ANALYTICS.bridge;
   if (b.empty) {
@@ -1263,20 +827,14 @@ function renderBridge() {
       ${b.bodyweight_sets.prior} &rarr; ${b.bodyweight_sets.current} this week.</p>`;
 }
 
-const STALL_ROWS = 3;
 function renderStalls() {
-  // Three rows, not twenty-nine. Exception reporting: a full ledger of lifts that are
-  // fine is noise, and the ones that matter get pushed off the screen by it.
-  const all = ANALYTICS.stalls;
-  const f = all.slice(0, STALL_ROWS);
+  const f = ANALYTICS.stalls;
   $("stalls").innerHTML = f.length ? f.map(s => `
     <div class="flagrow"><div class="fh">
       <span class="sev ${s.severity}">${s.severity.toUpperCase()}</span>
       <span class="fn">${label(s.exercise)}</span>
       <span class="fs">${s.slope_per_week >= 0 ? "+" : ""}${s.slope_per_week}/wk · flat ${s.flat_days}d</span>
-    </div><div class="fa">${s.action}</div></div>`).join("") +
-      (all.length > STALL_ROWS
-        ? `<p class="legend">${all.length - STALL_ROWS} more flagged.</p>` : "")
+    </div><div class="fa">${s.action}</div></div>`).join("")
     : ANALYTICS.sessions.length
       ? `<p class="empty">Nothing stalled. A flat e1RM between load increments is what
          double progression looks like when it is working - only a lift that has stopped
@@ -1456,8 +1014,7 @@ function renderSessionLog() {
 
 function renderTrends() {
   renderLocalNote();
-  renderKpis(); renderLiftGrid(); renderDetail(); renderLiftDisclosure();
-  renderMeters(); renderMissed();
+  renderKpis(); renderLiftGrid(); renderDetail(); renderMeters();
   renderBridge(); renderStalls(); renderBalance(); renderIndex();
   renderSessionLog();
 }
@@ -1777,106 +1334,6 @@ function renderAll() { pendingRender = false; renderToday(); renderTrends(); ren
 // changes what Today prescribes and what the Plan tab edits, and nothing else: the set
 // counts and the order follow the plan they were set on, and every trend keeps reading
 // log.csv, which does not know plans exist.
-// The verdict, and the coverage strip. Both are the plan judged against itself: no log
-// involved, so they say what the WEEK asks for rather than what happened. Mirrors
-// analyze.py's plan_coverage() over effectivePlan(), so a plan edited on the phone and
-// not yet exported is judged too - the same arrangement as the progression rule.
-function planCoverage() {
-  const per = {};
-  for (const m of MUSCLES) per[m] = 0;
-  const dayS = {};
-  for (const d of DAYS) {
-    let n = 0;
-    for (const p of effectivePlan(d)) {
-      n += p.sets;
-      for (const m of (LIB[p.exercise]?.muscles || [])) per[m] += p.sets;
-    }
-    dayS[d] = n;
-  }
-  const week = DAYS.reduce((a, d) => a + dayS[d], 0);
-  const freq = ATHLETE.sessions_per_week || 7;
-  const band = ATHLETE.session_sets || { min: 10, max: 12 };
-  const perSession = freq ? +(week / freq).toFixed(1) : null;
-  return { per, dayS, week, freq, band, perSession,
-    planned_days: DAYS.filter(d => dayS[d]).length,
-    verdict: perSession === null ? null
-      : perSession >= band.min && perSession <= band.max ? "in band"
-      : perSession > band.max ? "over" : "under",
-    multiple: perSession === null ? null : +(perSession / band.max).toFixed(1) };
-}
-
-function renderPlanVerdict() {
-  const el = $("plan-verdict");
-  if (!el) return;
-  const c = planCoverage();
-  const cls = c.verdict === "in band" ? "ok" : c.verdict === "over" ? "warn" : "flat";
-  // Against sessions_per_week as recorded, not an assumed frequency: this log has no
-  // trained-day data to infer one from, and inventing it would be the one thing this
-  // log exists not to do. Adherence reports the real thing once sessions land.
-  el.innerHTML =
-    `<p class="callout ${cls}"><b>${c.week} sets over ${c.freq} sessions =
-      ${c.perSession} per session.</b> ` +
-    (c.verdict === "in band"
-      ? `Inside the ${c.band.min}-${c.band.max} the routine was designed around.`
-      : c.verdict === "over"
-        ? `${c.multiple}&times; the top of the ${c.band.min}-${c.band.max} design.
-           Recovery is the binding constraint, not gym time.`
-        : `Below the ${c.band.min}-${c.band.max} design.`) +
-    `</p>` +
-    `<p class="callout flat">${c.planned_days} of 7 weekdays carry work &middot;
-      ${DAYS.map(d => `${d} ${c.dayS[d]}`).join(" &middot; ")}</p>`;
-}
-
-// Seven-second scan: which muscles the week asks for, against the same bands Trends
-// measures the log against. A muscle at 0 cannot come right by training harder - the
-// week does not ask for it - so it is called out separately from a low one.
-function renderPlanCoverage() {
-  const el = $("plan-coverage");
-  if (!el) return;
-  const { per } = planCoverage();
-  const uncovered = new Set(UNCOVERED);
-  const cells = MUSCLES.map(m => {
-    const b = BANDS[m], n = per[m];
-    const f = uncovered.has(m) ? "UNCOVERED"
-      : n < b.min || n > b.max ? "RED" : n < b.target ? "AMBER" : "GREEN";
-    return `<div class="covcell ${f}" title="${label(m)}: ${n} planned, band ${b.min}-${b.max}">
-      <span class="covn">${n}</span><span class="covm">${label(m).slice(0, 5)}</span></div>`;
-  }).join("");
-  const none = MUSCLES.filter(m => !uncovered.has(m) && per[m] === 0);
-  el.innerHTML = `<div class="covlab">planned per muscle &middot; vs band</div>
-    <div class="covstrip">${cells}</div>` +
-    (none.length ? `<p class="callout crit"><b>No day trains ${none.map(label).join(", ")}.</b>
-      That is a routine edit, not an adherence problem - training harder cannot fix a week
-      that does not ask for it.</p>` : "");
-}
-
-function renderPlanDisclosures() {
-  const pairs = [
-    ["btn-scan", "scancard", "showScan", "add a machine from a photo", "hide the photo dump"],
-    ["btn-plansettings", "plansettings", "showSettings", "plan name &middot; sync and export",
-     "hide plan settings"],
-    ["btn-planhelp", "planhelp", "showHelp", "how editing the plan works", "hide"],
-  ];
-  for (const [bid, pid, key, closed, open] of pairs) {
-    const b = $(bid), panel = $(pid);
-    if (!b || !panel) continue;
-    b.innerHTML = state[key] ? open : closed;
-    b.setAttribute("aria-expanded", String(state[key]));
-    panel.hidden = !state[key];
-    b.onclick = () => { state[key] = !state[key]; renderPlanDisclosures(); };
-  }
-  // A real warning - dropped edits, or unexported drift that makes the bands measure a
-  // different plan - opens the section it lives in rather than hiding behind a tap. The
-  // informational note does not, or the collapse would never hold.
-  const note = $("plannote");
-  if (note && !note.hidden && note.dataset.warn === "1" && !state.showSettings) {
-    state.showSettings = true;
-    $("plansettings").hidden = false;
-    const b = $("btn-plansettings");
-    if (b) { b.innerHTML = "hide plan settings"; b.setAttribute("aria-expanded", "true"); }
-  }
-}
-
 function renderPlanPicker() {
   const el = $("planpicker");
   if (!el) return;
@@ -1970,9 +1427,6 @@ function renderPlan() {
   const echo = $("plan-echo");
   if (echo) echo.innerHTML = "";
   renderPlanPicker();
-  renderPlanVerdict();
-  renderPlanCoverage();
-  renderPlanDisclosures();
   $("exlist").innerHTML = Object.keys(LIB).sort()
     .map(e => `<option value="${label(e)}">`).join("");
 
@@ -2329,11 +1783,6 @@ function renderPlanNote(structural) {
       : `Your exercise order is stored and follows you across devices. It survives a new ` +
         `publish - only set counts and lift changes need Export.`);
   el.hidden = !bits.length;
-  // A warning has to open the section it lives in; the steady-state "your order is
-  // saved" line must not, or the collapse never collapses. One flag, set here, so the
-  // disclosure does not have to guess from the text.
-  const warn = !!(state.dropped || structural);
-  el.dataset.warn = warn ? "1" : "";
   el.className = "scannote" + (state.dropped ? " bad" : "");
   el.innerHTML = bits.join("<br><br>");
 }
@@ -3017,11 +2466,7 @@ function showFeedback(html) { $("feedback").innerHTML = html; }
 function saveSession() {
   try { localStorage.setItem(STORE_SESSION, JSON.stringify(
     { date: state.sessionDate, sets: state.sets, sticky: state.sticky,
-      viewDate: state.date, dayOffset: state.dayOffset,
-      // The rest timer is part of the session, not of the page: locking the phone
-      // between sets is the normal case, and a timer that resets on reload is useless.
-      rest: state.rest, focus: state.focus, showFull: state.showFull,
-      focusMode: state.focusMode })); }
+      viewDate: state.date, dayOffset: state.dayOffset })); }
   catch { /* private mode */ }
 }
 function loadSession() {
@@ -3030,15 +2475,6 @@ function loadSession() {
     if (!raw) return;
     const d = JSON.parse(raw);
     if (!d) return;
-    // The rest timer and the focused set belong to the SESSION, not to the page: locking
-    // the phone between sets is the normal case, and a timer that resets on reload is
-    // useless exactly when it is being relied on.
-    if (Number.isFinite(d.rest)) state.rest = d.rest;
-    if (d.focus && d.focus.exercise) state.focus = d.focus;
-    // Opening the full list is a choice about the session in progress, not about the
-    // page load - a reload that silently re-collapses it loses the place you were at.
-    if (typeof d.showFull === "boolean") state.showFull = d.showFull;
-    if (typeof d.focusMode === "boolean") state.focusMode = d.focusMode;
     // The sets carry their OWN date, so they survive a reload whatever day was on screen
     // - but only as that date. A session left open overnight reappears under the day it
     // was logged on, never silently under today.
@@ -3065,14 +2501,6 @@ function selectTab(name) {
   for (const t of ["today", "trends", "plan"]) {
     $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
     $(`p-${t}`).hidden = t !== name;
-  }
-  // The log bar is FIXED, so it outlives the panel it belongs to unless it is put away
-  // explicitly - it was floating over Trends and Plan. renderFocus() puts it back when
-  // Today renders, so hiding it here is enough.
-  if (name !== "today") {
-    const lb = $("logbar");
-    if (lb) lb.hidden = true;
-    document.body.classList.remove("haslogbar");
   }
   // A row left picked up on a tab you walked away from is a held gesture with its
   // instruction scrolled out of sight. Drop it.
