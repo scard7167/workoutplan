@@ -390,3 +390,11 @@ h1.big { font-size: 26px; letter-spacing: -.02em; }
 .nextrow .t { flex: 1; font: 400 12.5px/1.45 var(--font-ui); color: var(--color-neutral-400); }
 
 svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* RIR sits under the two steppers rather than beside them: a third stepper does not fit
+   at 390px, and RIR is a one-of-six choice, not a value you nudge. It is ADDED to the
+   sheet - nothing was moved to make room. */
+.rirrow { display: flex; align-items: center; gap: 10px; }
+.rirrow .label { flex: none; }
+.rirrow .pills { flex: 1; flex-wrap: nowrap; justify-content: space-between; }
+.rirrow .pill { min-width: 42px; min-height: 44px; justify-content: center; padding: 7px 0; }

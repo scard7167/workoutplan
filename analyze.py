@@ -1187,9 +1187,119 @@ def analytics_json(rows, routine, lib, cfg) -> dict:
 # cli
 # --------------------------------------------------------------------------- #
 
+# ---------------------------------------------------------------- sync (store -> log)
+
+def store_rows(doc: dict, lib: dict) -> list[tuple]:
+    """Turn the web app's store document into schema rows, newest last.
+
+    The app keeps ONE document: {"sessions": {date: {"lifts": {exercise: [{w,r,rir}]}}}}.
+    This is the only place that shape is read, and it validates nothing itself - every
+    row goes through load_log() before it is allowed anywhere near log.csv.
+    """
+    sessions = doc.get("sessions") or {}
+    if not isinstance(sessions, dict):
+        raise LogError("store: 'sessions' is not an object")
+    out = []
+    for date_s in sorted(sessions):
+        sess = sessions[date_s] or {}
+        lifts = sess.get("lifts") or {}
+        for ex in sorted(lifts):
+            sets = lifts[ex] or []
+            for n, v in enumerate(sets, 1):
+                rir = v.get("rir")
+                out.append((date_s, "strength", ex, n,
+                            v.get("w"), v.get("r"), "" if rir is None else rir, ""))
+    return out
+
+
+def sync_plan(doc: dict, rows: list[Set], lib: dict) -> dict:
+    """What a sync WOULD write. Never writes.
+
+    A (date, exercise) pair already in log.csv is skipped WHOLE and reported. The store
+    has no per-set id, so there is no way to tell set 3 of a re-opened session from a
+    duplicate of set 3 - and a silent duplicate in the system of record is far worse
+    than a skip the user is told about and can resolve by hand, out loud, which is what
+    CLAUDE.md asks for anyway.
+    """
+    have = {(s.date.isoformat(), s.exercise) for s in rows}
+    add, skip, unknown = [], [], []
+    for r in store_rows(doc, lib):
+        key = (r[0], r[2])
+        if r[2] not in lib:
+            unknown.append(key)
+        elif key in have:
+            skip.append(key)
+        else:
+            add.append(r)
+    return {"add": add, "skip": sorted(set(skip)), "unknown": sorted(set(unknown))}
+
+
+def sync_validate(log_path: str, add: list[tuple], lib: dict, cfg: dict) -> list[Set]:
+    """Load log.csv + the new rows as one file, through the real strict loader.
+
+    Not a lighter check written for this path: the whole point is that what lands in
+    log.csv passes exactly what `validate` passes, duplicate and ordering checks and all.
+    """
+    import tempfile
+    with open(log_path, newline="") as fh:
+        existing = fh.read()
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, newline="") as tf:
+        tf.write(existing)
+        w = csv.writer(tf)
+        for r in add:
+            w.writerow(r)
+        tmp = tf.name
+    try:
+        return load_log(tmp, lib, cfg)
+    except LogError as exc:
+        # The scratch file's name means nothing to anyone. Name the store instead, and
+        # keep the line number, which still points at the offending row.
+        raise LogError(str(exc).replace(tmp, "<from the store>")) from None
+    finally:
+        os.unlink(tmp)
+
+
+def sync_apply(log_path: str, add: list[tuple]) -> None:
+    """Append, never rewrite. log.csv history is immutable."""
+    with open(log_path, newline="") as fh:
+        existing = fh.read()
+    needs_nl = bool(existing) and not existing.endswith("\n")
+    with open(log_path, "a", newline="") as fh:
+        if needs_nl:
+            fh.write("\n")
+        w = csv.writer(fh)
+        for r in add:
+            w.writerow(r)
+
+
+def print_sync(plan: dict, before: int, after: int, applied: bool, log_path: str) -> None:
+    for d, ex in plan["unknown"]:
+        print(f"UNKNOWN  {d}  {ex} is not in exercises.yaml - add it there first, then sync")
+    for d, ex in plan["skip"]:
+        print(f"SKIP     {d}  {ex} already in log.csv - state any correction out loud, one row at a time")
+    for r in plan["add"]:
+        rir = f" @{r[6]}" if r[6] != "" else ""
+        print(f"{'ADDED' if applied else 'WOULD ADD'}  {r[0]}  {r[2]} s{r[3]}  {r[4]} x {r[5]}{rir}")
+    n = len(plan["add"])
+    if not n:
+        if plan["unknown"]:
+            print(f"nothing synced - {len(plan['unknown'])} session/lift pair(s) name an "
+                  "exercise the library does not have")
+        elif plan["skip"]:
+            print(f"nothing to sync - {log_path} already has every session in the store")
+        else:
+            print("nothing to sync - the store holds no finished sessions")
+        return
+    verb = "appended" if applied else "would append"
+    print(f"\n{n} row{'' if n == 1 else 's'} {verb}: {before} -> {after} working sets")
+    if not applied:
+        print("dry run. Re-run with --apply to write, then: python3 web/build_data.py")
+
 COMMANDS = ["validate", "volume", "today", "prescribe", "progression", "index",
             "bridge", "stalls", "balance", "adherence", "report", "json",
-            "plans", "bands"]
+            "plans", "bands", "sync"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1203,6 +1313,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--plan", default=None,
                     help="which weekly plan to act on; default is the one active today")
     ap.add_argument("--out", default=os.path.join(HERE, "web", "analytics.json"))
+    ap.add_argument("--from", dest="src", default=None,
+                    help="sync: the web app's store document (JSON) to read sessions from")
+    ap.add_argument("--apply", action="store_true",
+                    help="sync: actually append to the log. Without it, sync is a dry run")
     args = ap.parse_args(argv)
 
     try:
@@ -1225,7 +1339,22 @@ def main(argv: list[str] | None = None) -> int:
         return name
 
     try:
-        if args.command == "validate":
+        if args.command == "sync":
+            if not args.src:
+                print("FAIL: sync needs --from <store.json>", file=sys.stderr)
+                return 2
+            with open(args.src) as fh:
+                doc = json.load(fh)
+            plan = sync_plan(doc, rows, lib)
+            # Validate BEFORE writing, through the same loader `validate` uses. A row
+            # that would not load must never reach the system of record.
+            after = sync_validate(args.log, plan["add"], lib, cfg) if plan["add"] else rows
+            if plan["add"] and args.apply:
+                sync_apply(args.log, plan["add"])
+            print_sync(plan, len(rows), len(after), args.apply, args.log)
+            if plan["unknown"]:
+                return 2
+        elif args.command == "validate":
             np = len(routine["plans"])
             print(f"OK: {args.log} - {len(rows)} working sets, "
                   f"{len({s.date for s in rows})} sessions, "

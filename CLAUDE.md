@@ -133,6 +133,15 @@ from `exercises.yaml` and the thresholds in `config.yaml`:
 Bodyweight exercises: rule 2 on a 0 kg entry means the first added load (one increment).
 Rule 1 cannot go below 0 - hold at bodyweight and lower the rep target instead.
 
+**RIR is the field that lets a load move at all.** Rule 2 needs a verified RIR and rule 1
+needs RIR 0; a blank RIR satisfies neither. So a log of blank-RIR sets can only ever
+HOLD: reps climb to the ceiling, `min(ceiling, best + 1)` pins them there, and the weight
+never changes again. The design handoff's log sheet had no RIR control, which is exactly
+the dead end it produced - measured, not guessed: four sets at the 10-rep ceiling gave
+`60 x10 (hold)` blank and `62.5 x6 (progress)` at RIR 1. The sheet now carries an RIR
+row (0-4 and blank), sticky per lift so it is one tap per exercise rather than per set,
+and it says out loud when a blank RIR at the ceiling is what is holding the load down.
+
 No load ever comes from anywhere else. Not from feel, not from a round number, not from
 what the plates suggest. If the rule produces 62.5 kg, the prescription is 62.5 kg.
 
@@ -151,11 +160,13 @@ seeding the same history into the app and reading the load off the log sheet. Al
 agree. Re-run that check after touching either copy; four of the twelve failed the first
 time it was run:
 
-    python3 tests/prescribe_ref.py
-    (cd web && python3 -m http.server 8080 &) && PW_ROOT=/tmp/pw node tests/prescribe_app.mjs 8080
+    PW_ROOT=/tmp/pw sh tests/check.sh
 
-Playwright is deliberately NOT in `web/package.json` - that file is what Vercel installs.
-Install it anywhere and point `PW_ROOT` at it.
+That runs everything a syntax pass cannot: the module parse, the loader, the twelve-case
+comparison (`tests/prescribe_diff.py`, which EXITS NON-ZERO on a mismatch rather than
+leaving two lists to eyeball), and the RIR chain. Playwright is deliberately NOT in
+`web/package.json` - that file is what Vercel installs - so install it anywhere
+(`npm i --prefix /tmp/pw playwright`) and point `PW_ROOT` at it.
 
 ## Session protocol
 
@@ -249,6 +260,16 @@ recomputes a deep metric in JavaScript.
 - `python3 analyze.py report` - all of the above, in order
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
+- `python3 analyze.py sync --from <store.json> [--apply]` - move finished sessions out of
+  the web app's store and into `log.csv`. **Dry run by default**: it prints every row it
+  would append and writes nothing. Rows are validated by `load_log` itself - the same
+  loader `validate` uses - BEFORE anything is written, so a row that would not load never
+  reaches the system of record. It APPENDS, never rewrites. A `(date, exercise)` pair
+  already in `log.csv` is skipped WHOLE and reported: the store has no per-set id, so
+  there is no way to tell set 3 of a re-opened session from a duplicate of set 3, and a
+  silent duplicate in the system of record is far worse than a skip you are told about.
+  Get the input from the app: **History -> Download for log.csv**. Run
+  `python3 web/build_data.py` afterwards.
 
 ## The handoff override - 2026-09-27
 
@@ -275,6 +296,13 @@ Two consequences the user accepted explicitly, having been shown both:
   measure different things now. That is the override, not a bug - but if a THIRD number
   appears that neither of these tables explains, that is a bug, and say so.
 
+**Two places the handoff was overruled, both because its design cannot serve the rule:**
+
+1. The log sheet opens on `prescribe()`'s answer, not on last session's weight.
+2. The sheet has an **RIR row**, which the handoff's two-stepper design did not. Without
+   it no load could ever increase - see the Progression rule. Added, not moved: nothing
+   was demoted to make room.
+
 The single-implementation rule still holds in spirit: the web derivations live in one
 place (`web/app.js`, the section under "the log & derivations") and nowhere else. They
 are not duplicated into the renderers.
@@ -295,7 +323,9 @@ branch.
 | `web/data.js` | GENERATED - the library, the plans, the bands and the log.csv rows |
 | `web/api/log.js` | the store of record on Vercel, backed by Vercel Blob |
 | `web/manifest.webmanifest`, `icon*.png/svg` | installs to the phone home screen |
+| `tests/check.sh` | every check a syntax pass cannot do. Run it before pushing `web/` or `analyze.py` |
 | `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
+| `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
 
 ### Where a logged session lives
 
@@ -310,9 +340,11 @@ Three layers, and conflating them loses data:
   `{ ok: false, reason: "not_configured" }` and the page **says so on every screen**.
   A store that silently is not there is the one failure mode this app cannot have.
 - **`log.csv` is still the append-only system of record** for `analyze.py`. Nothing in
-  the app writes to it. Sessions live in the store until something moves them across;
-  that bridge is not built yet, and until it is, the CLI and the app see different
-  histories. Say so rather than papering over it.
+  the app writes to it and nothing ever should: appending to the system of record is a
+  deliberate, reviewed act, not a side effect of tapping Finish. The crossing is
+  `analyze.py sync` (see Analytics), fed by **History -> Download for log.csv**, dry-run
+  first. Until a sync is run the CLI and the app see different histories - say so rather
+  than papering over it.
 
 ### Rules the UI has to keep
 
@@ -327,6 +359,10 @@ Three layers, and conflating them loses data:
 - **Loads come from the progression rule, never from the design.** The log sheet opens
   on `prescribe()`'s answer - deload, progress or hold - not on a round number and not
   on last week's weight. This is the one place the handoff was overruled.
+- **RIR is recorded, and its absence is explained.** A blank RIR can only ever produce
+  "hold"; the sheet says so when you are at the rep ceiling with RIR blank. Never default
+  RIR to a number the user did not press - that is fabricating the one field the
+  progression rule trusts.
 - **A provisional lift cannot be logged.** No `increment` means no prescription: the
   weight boxes are disabled and the sheet says `needs setup`. **`increment` is never
   guessed**, and `Export routine.yaml` emits a commented stub rather than a value.
@@ -344,9 +380,12 @@ Three layers, and conflating them loses data:
 
 The handoff flags these and they were NOT invented: auth/onboarding, a settings screen
 (body weight is hard-coded at 78 kg, units, band editing), a rest timer, and the
-`routine.yaml` import path. Empty states and the local-only banner WERE written, because
-`log.csv` is empty and the app is unusable without them - they are the one place the
-handoff was extended rather than followed. Ask before adding any of the rest.
+`routine.yaml` import path. Ask before adding any of the rest.
+
+Three things WERE added beyond the handoff, each because the app is unusable or dishonest
+without it: empty states and the local-only banner (`log.csv` is empty and there is no
+store yet), the RIR row (no load could otherwise ever increase), and
+**History -> Download for log.csv** (the only way sessions can reach `analyze.py`).
 
 ### The published Artifact
 

@@ -153,7 +153,7 @@ const state = {
   cardio: [],
   live: null,                      // {date, plan, logged:{}, extra:{}, order:null}
   // ui only
-  reorder: false, sheet: null, w: 0, r: 8, summaryOn: false, lift: null,
+  reorder: false, sheet: null, w: 0, r: 8, rir: null, summaryOn: false, lift: null,
   libOn: false, query: "", newMuscle: "chest", switchOn: false,
   renaming: null, draft: "", renameError: "",
   openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null,
@@ -168,7 +168,7 @@ const liveDate = () => (state.live ? state.live.date : today());
 function ensureLive() {
   const d = today();
   if (state.live && state.live.date !== d && !Object.keys(state.live.logged).length) state.live = null;
-  if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null };
+  if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {} };
   return state.live;
 }
 
@@ -856,6 +856,8 @@ function renderHistory() {
       <div><div class="kicker">All sessions</div><h1>${all.length} logged</h1></div>
       <div class="right"><div class="count">${totalT.toFixed(1)}<span>t</span></div><div class="caption">total load</div></div>
     </div>
+    ${Object.keys(state.sessions).length ? `<button class="btn ghost" data-act="export-store">
+      Download for log.csv</button>` : ""}
     ${all.length ? all.slice(0, 60).map((s) => {
       const open = state.openSession === s.date;
       return `<div class="sessrow">
@@ -870,7 +872,10 @@ function renderHistory() {
     }).join("") : `<div class="empty"><b>No sessions yet.</b>
       Finish a session on the Session tab and it appears here immediately.</div>`}
     <p class="foot">Tonnage is load × reps, bodyweight lifts at ${BW_KG} kg. Cardio is
-      never counted here.</p>`;
+      never counted here. <b>Download for log.csv</b> saves the sessions this app holds;
+      <code>python3 analyze.py sync --from &lt;that file&gt;</code> shows what it would
+      append to the real log, and <code>--apply</code> writes it. Nothing here touches
+      <code>log.csv</code> on its own.</p>`;
 }
 
 /* ------------------------------------------------------------------- overlays */
@@ -883,6 +888,22 @@ function renderOverlay() {
   if (state.switchOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${switchHtml()}`);
   if (state.libOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${libHtml()}`);
   o.innerHTML = "";
+}
+
+// RIR is the field that decides whether a load can ever go UP: rule 3 needs a verified
+// RIR <= rir_ceiling and a blank one does not qualify - "unverified is not proven". The
+// handoff's sheet had no RIR control at all, so every logged set was blank and the
+// progress branch could never fire: reps would climb to the ceiling and the weight would
+// never move again. This says so at the moment of logging rather than letting the user
+// discover it over a month of unchanged loads.
+function rirWarning(ex, lib) {
+  if (!lib || lib.increment == null || state.rir != null) return "";
+  const ceil = lib.rep_range[1];
+  if (state.r < ceil) return "";
+  return `<div class="banner"><span class="tag">holds</span><div>
+    <b>Blank RIR holds the load.</b> You are at the ${ceil}-rep ceiling, but the rule
+    only adds weight on a verified RIR ≤ ${PROGRESSION.rir_ceiling}. Tap one and the next
+    session steps up.</div></div>`;
 }
 
 function sheetHtml() {
@@ -912,13 +933,22 @@ function sheetHtml() {
         <input class="val mono" id="s-r" inputmode="numeric" value="${state.r}">
         <button class="step" data-act="r" data-d="1" aria-label="more"><span>+</span></button></div></div>
     </div>
+    <div class="rirrow">
+      <span class="label">RIR</span>
+      <div class="pills">
+        ${[0, 1, 2, 3, 4].map((n) =>
+          `<button class="pill" data-act="rir" data-v="${n}" aria-pressed="${state.rir === n}">${n}</button>`).join("")}
+        <button class="pill" data-act="rir" data-v="" aria-pressed="${state.rir == null}">—</button>
+      </div>
+    </div>
     <p class="meta" style="margin:-4px 0 0">${state.w == null
       ? `No prior session, so the rule gives no load - it never invents a starting one. Type the weight you are using; target ${state.r} reps.`
       : `${{ deload: "Deload: ", "deload floor": "Deload, and already at bodyweight, so the rep target drops instead: ",
               progress: "Progress: ", "no baseline": "" }[p.why] || ""}the rule asks ${
-              p.w === 0 && isBW(ex) ? "bodyweight" : `${p.w} kg`} × ${p.r}. Steppers move 2.5 kg and 1 rep; tap a number to type it.`}</p>`}
+              p.w === 0 && isBW(ex) ? "bodyweight" : `${p.w} kg`} × ${p.r}. Steppers move 2.5 kg and 1 rep; tap a number to type it.`}</p>
+    ${rirWarning(ex, lib)}`}
     ${done.length ? `<div class="setlist">${done.map((v, i) =>
-      `<div class="r"><span class="k">set ${i + 1}</span><span class="v">${v.w} × ${v.r}</span></div>`).join("")}</div>` : ""}
+      `<div class="r"><span class="k">set ${i + 1}</span><span class="v">${v.w} × ${v.r}${v.rir == null ? "" : ` @${v.rir}`}</span></div>`).join("")}</div>` : ""}
     <div style="display:flex;gap:9px">
       <button class="btn primary" data-act="log-set" ${needs || state.w == null ? "disabled" : ""}>${
         state.w == null ? "Enter the weight" : `Log set ${done.length + 1} · ${state.w} × ${state.r}`}</button>
@@ -1111,7 +1141,7 @@ function finish() {
   const sessions = { ...state.sessions };
   const prior = sessions[L.date] ? sessions[L.date].lifts : {};
   const lifts = { ...prior };
-  for (const [ex, v] of entries) lifts[ex] = (lifts[ex] || []).concat(v.map((x) => ({ w: x.w, r: x.r, rir: null })));
+  for (const [ex, v] of entries) lifts[ex] = (lifts[ex] || []).concat(v.map((x) => ({ w: x.w, r: x.r, rir: x.rir == null ? null : x.rir })));
   // The baseline has to be read BEFORE the session joins the log, or every lift
   // measures itself against the sets just logged and every delta reads "held".
   const prev = bySession(allSets().filter((s) => s.date < L.date));
@@ -1128,7 +1158,7 @@ function finish() {
   };
   state.sessions = sessions;
   sessions[L.date] = { date: L.date, plan: L.plan, lifts, at: new Date().toISOString() };
-  state.live = { date: today(), plan: state.sessionPlanKey, logged: {}, extra: {}, order: null };
+  state.live = { date: today(), plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {} };
   setState({ summaryOn: true, lastSummary: snap, sheet: null, reorder: false });
 }
 
@@ -1167,8 +1197,9 @@ function logSet() {
   const lib = libOf(ex);
   if (!lib || lib.increment == null || state.w == null) return;
   const logged = { ...L.logged };
-  logged[ex] = (logged[ex] || []).concat([{ w: state.w, r: state.r }]);
+  logged[ex] = (logged[ex] || []).concat([{ w: state.w, r: state.r, rir: state.rir }]);
   L.logged = logged;
+  L.rirBy = { ...(L.rirBy || {}), [ex]: state.rir };
   const lift = sessionLifts().find((l) => l.ex === ex) || { sets: 3 };
   // The sheet auto-dismisses once the lift's target set count is reached; otherwise it
   // stays open on the same load for the next set.
@@ -1183,7 +1214,11 @@ function openSheet(ex) {
   // except a bodyweight lift, where 0 added load is the real bar, not a guess.
   const seed = already.length ? already[already.length - 1]
     : { w: p.w == null && isBW(ex) ? 0 : p.w, r: p.r };
-  setState({ sheet: ex, w: seed.w, r: seed.r }, { persist: false });
+  const hist = allSets().filter((s) => s.ex === ex);
+  const rir = already.length ? already[already.length - 1].rir
+    : (L.rirBy || {})[ex] !== undefined ? L.rirBy[ex]
+    : hist.length ? hist[hist.length - 1].rir : null;
+  setState({ sheet: ex, w: seed.w, r: seed.r, rir: rir === undefined ? null : rir }, { persist: false });
 }
 
 function logCardio() {
@@ -1195,6 +1230,21 @@ function logCardio() {
     type: state.cType, min, km: km > 0 ? +km.toFixed(2) : null, lift: state.cWhen === "visit",
   };
   setState({ cLast: rec, cardio: [rec, ...state.cardio].sort((a, b) => (a.date < b.date ? 1 : -1)) });
+}
+
+// The app cannot write to log.csv and must not try: that file is the system of record
+// and appending to it is a deliberate, reviewed act. So it hands over exactly what
+// `analyze.py sync` reads, and the CLI does the appending, dry-run first.
+function exportStore() {
+  const doc = { v: 4, exported_at: new Date().toISOString(), sessions: state.sessions };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 1)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `strengthlog-${today()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 function exportYaml() {
@@ -1267,6 +1317,7 @@ document.addEventListener("click", (e) => {
       break;
     }
     case "r": setState({ r: Math.max(1, state.r + num(t.dataset.d)) }, { persist: false }); break;
+    case "rir": setState({ rir: v === "" ? null : parseInt(v, 10) }, { persist: false }); break;
     case "log-set": logSet(); break;
     case "extra-set": {
       const L = ensureLive();
@@ -1301,6 +1352,7 @@ document.addEventListener("click", (e) => {
     case "publish": { const base = clone(state.base); base[state.planKey] = clone(state.plans[state.planKey]); setState({ base }); break; }
     case "undo-plan": { const plans = clone(state.plans); plans[state.planKey] = clone(state.base[state.planKey]); setState({ plans }); break; }
     case "export": exportYaml(); break;
+    case "export-store": exportStore(); break;
     case "open-lib": setState({ libOn: true, query: "" }, { persist: false }); break;
     case "add-lift": editPlan((w) => { w[state.day] = (w[state.day] || []).concat([[v, 3]]); }); setState({ libOn: false, query: "" }); break;
     case "new-muscle": setState({ newMuscle: v }, { persist: false }); break;
