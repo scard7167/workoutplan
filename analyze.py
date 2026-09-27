@@ -37,7 +37,8 @@ from typing import Iterable
 
 import yaml
 
-HEADER = ["date", "type", "exercise", "set_no", "weight_kg", "reps", "rir", "notes"]
+HEADER = ["date", "type", "exercise", "set_no", "weight_kg", "reps", "rir", "notes",
+          "duration_min", "distance_km"]
 VALID_TYPES = {"strength", "cardio"}
 MUSCLES = [
     "chest", "lats", "upper_back", "front_delts", "side_delts", "rear_delts",
@@ -66,6 +67,8 @@ class Set:
     reps: int
     rir: int | None
     notes: str
+    duration_min: float | None = None
+    distance_km: float | None = None
 
     @property
     def e1rm(self) -> float:
@@ -109,6 +112,24 @@ def load_exercises(path: str | None = None) -> dict:
         lib = yaml.safe_load(fh)
     seen: dict[str, str] = {}
     for name, ex in lib.items():
+        if ex.get("cardio"):
+            # A cardio entry has no load, so it must not carry the fields that would
+            # give it one. Refusing them here is what makes "no prescription for
+            # cardio" structural rather than a convention someone can forget.
+            strength = [k for k in ("muscles", "increment", "rep_range") if k in ex]
+            if strength:
+                raise LogError(
+                    f"exercises.yaml: {name} is cardio but also declares {strength} - "
+                    "cardio has no load, no prime mover and no rep range")
+            if "aliases" not in ex:
+                raise LogError(f"exercises.yaml: {name} is missing 'aliases'")
+            for alias in list(ex["aliases"]) + [name]:
+                alias = alias.lower().strip()
+                if seen.get(alias, name) != name:
+                    raise LogError(
+                        f"exercises.yaml: alias '{alias}' claimed by both {seen[alias]} and {name}")
+                seen[alias] = name
+            continue
         for key in ("aliases", "muscles", "increment", "rep_range"):
             if key not in ex:
                 raise LogError(f"exercises.yaml: {name} is missing '{key}'")
@@ -285,8 +306,19 @@ def resolve_exercise(token: str, lib: dict) -> str | None:
     return _alias_map(lib).get(token.lower().strip())
 
 
-def load_log(path: str, lib: dict, cfg: dict) -> list[Set]:
-    """Strict loader. Fails loud on the first offending line, naming file:line."""
+def load_log(path: str, lib: dict, cfg: dict, kind: str = "strength",
+             warn: bool = True) -> list[Set]:
+    """Strict loader. Fails loud on the first offending line, naming file:line.
+
+    `kind` decides what comes BACK, never what is validated - every row in the file is
+    checked whatever you ask for. It defaults to "strength", so every analytic that has
+    ever called this function keeps receiving strength sets and nothing else. That
+    default is the guarantee: a cardio row cannot reach an e1RM, a hard-set count or a
+    volume band by being forgotten about, because it never arrives there. Ask for
+    "cardio" or "all" deliberately.
+    """
+    if kind not in ("strength", "cardio", "all"):
+        raise LogError(f"load_log: kind must be strength, cardio or all, not {kind!r}")
     if not os.path.exists(path):
         raise LogError(f"{path}: no such file")
     rows: list[Set] = []
@@ -304,22 +336,44 @@ def load_log(path: str, lib: dict, cfg: dict) -> list[Set]:
             where = f"{path}:{lineno}"
             if len(row) != len(HEADER):
                 raise LogError(f"{where} has {len(row)} fields, expected {len(HEADER)}: {row!r}")
-            date_s, type_s, ex_s, set_s, w_s, reps_s, rir_s, notes = [c.strip() for c in row]
+            (date_s, type_s, ex_s, set_s, w_s, reps_s, rir_s, notes,
+             dur_s, dist_s) = [c.strip() for c in row]
             try:
                 date = dt.date.fromisoformat(date_s)
             except ValueError:
                 raise LogError(f"{where} date {date_s!r} is not ISO YYYY-MM-DD")
             if type_s not in VALID_TYPES:
                 raise LogError(f"{where} type {type_s!r} not in {sorted(VALID_TYPES)}")
-            if type_s == "cardio":
-                raise LogError(
-                    f"{where} type 'cardio' is not supported in v1 - the column exists "
-                    "only to avoid a later migration")
             if ex_s not in lib:
                 hint = resolve_exercise(ex_s, lib)
                 extra = f" (did you mean {hint}?)" if hint else ""
                 raise LogError(
                     f"{where} exercise {ex_s!r} is not a canonical name in exercises.yaml{extra}")
+            is_cardio_ex = bool(lib[ex_s].get("cardio"))
+            if (type_s == "cardio") != is_cardio_ex:
+                raise LogError(
+                    f"{where} type {type_s!r} but {ex_s} is "
+                    f"{'a cardio' if is_cardio_ex else 'a strength'} exercise - "
+                    "the type column and the library must agree")
+
+            if type_s == "cardio":
+                set_no = _int(set_s, where, "set_no", lo=1)
+                for name, raw in (("weight_kg", w_s), ("reps", reps_s), ("rir", rir_s)):
+                    if raw not in ("", "0"):
+                        raise LogError(
+                            f"{where} {name}={raw!r} on a cardio row - cardio carries no "
+                            "load, reps or RIR; use duration_min and distance_km")
+                duration = _float(dur_s, where, "duration_min", lo=0.5)
+                distance = None if dist_s == "" else _float(dist_s, where, "distance_km", lo=0)
+                rows.append(Set(lineno, date, type_s, ex_s, set_no, 0.0, 0, None, notes,
+                                duration, distance))
+                continue
+
+            for name, raw in (("duration_min", dur_s), ("distance_km", dist_s)):
+                if raw != "":
+                    raise LogError(
+                        f"{where} {name}={raw!r} on a strength row - those two columns "
+                        "belong to cardio only")
             set_no = _int(set_s, where, "set_no", lo=1)
             reps = _int(reps_s, where, "reps", lo=1, hi=100)
             rir = None if rir_s == "" else _int(rir_s, where, "rir", lo=0, hi=4)
@@ -333,8 +387,11 @@ def load_log(path: str, lib: dict, cfg: dict) -> list[Set]:
                 raise LogError(f"{where} weight_kg 0 but {ex_s} is not a bodyweight exercise")
             rows.append(Set(lineno, date, type_s, ex_s, set_no, weight, reps, rir, notes))
     _check_duplicates(rows, path)
-    _warn_out_of_order(rows, path)
-    return rows
+    if warn:
+        _warn_out_of_order(rows, path)
+    if kind == "all":
+        return rows
+    return [r for r in rows if r.type == kind]
 
 
 def _int(raw: str, where: str, field: str, lo: int | None = None, hi: int | None = None) -> int:
@@ -346,6 +403,16 @@ def _int(raw: str, where: str, field: str, lo: int | None = None, hi: int | None
         raise LogError(f"{where} {field} {val} is below {lo}")
     if hi is not None and val > hi:
         raise LogError(f"{where} {field} {val} is above {hi}")
+    return val
+
+
+def _float(raw: str, where: str, field: str, lo: float | None = None) -> float:
+    try:
+        val = float(raw)
+    except ValueError:
+        raise LogError(f"{where} {field} {raw!r} is not a number")
+    if lo is not None and val < lo:
+        raise LogError(f"{where} {field} {val} is below {lo}")
     return val
 
 
@@ -1187,6 +1254,65 @@ def analytics_json(rows, routine, lib, cfg) -> dict:
 # cli
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------- cardio report
+
+def cardio_report(rows: list[Set], weeks: int = 8) -> dict:
+    """Weekly cardio minutes and km. Reported, never inferred from.
+
+    Deliberately thin. There is no trend, no target band and no verdict, because the
+    record is not yet complete enough to carry one: the app captures gym cardio and an
+    outdoor run, while the training context is 30-50 km/week of cycling and running that
+    this log has never seen. A partial record that LOOKED authoritative would be worse
+    than none - it would show lightly loaded legs and every derivation built on it would
+    be confidently wrong. So this counts what is there and stops.
+    """
+    if not rows:
+        return {"weeks": [], "total_min": 0.0, "total_km": 0.0, "by_type": {}}
+    last = max(r.date for r in rows)
+    monday = last - dt.timedelta(days=last.weekday())
+    out = []
+    for k in range(weeks - 1, -1, -1):
+        start = monday - dt.timedelta(days=7 * k)
+        end = start + dt.timedelta(days=6)
+        wk = [r for r in rows if start <= r.date <= end]
+        out.append({
+            "from": start.isoformat(),
+            "sessions": len(wk),
+            "minutes": round(sum(r.duration_min or 0 for r in wk), 1),
+            "km": round(sum(r.distance_km or 0 for r in wk), 2),
+        })
+    by_type: dict[str, dict] = {}
+    for r in rows:
+        t = by_type.setdefault(r.exercise, {"sessions": 0, "minutes": 0.0, "km": 0.0})
+        t["sessions"] += 1
+        t["minutes"] += r.duration_min or 0
+        t["km"] += r.distance_km or 0
+    return {
+        "weeks": out,
+        "total_min": round(sum(r.duration_min or 0 for r in rows), 1),
+        "total_km": round(sum(r.distance_km or 0 for r in rows), 2),
+        "by_type": {k: {"sessions": v["sessions"], "minutes": round(v["minutes"], 1),
+                        "km": round(v["km"], 2)} for k, v in sorted(by_type.items())},
+    }
+
+
+def print_cardio(rep: dict) -> None:
+    print("CARDIO  minutes and km per week")
+    if not rep["weeks"]:
+        print("  nothing logged. Cardio rows reach log.csv via `analyze.py sync`.")
+        return
+    for w in rep["weeks"]:
+        km = f"{w['km']:g} km" if w["km"] else "-"
+        print(f"  {w['from']}  {w['sessions']:>2} session(s)  {w['minutes']:>6.0f} min  {km:>10}")
+    print()
+    for name, t in rep["by_type"].items():
+        km = f"{t['km']:g} km" if t["km"] else "-"
+        print(f"  {name:<14} {t['sessions']:>3} session(s)  {t['minutes']:>6.0f} min  {km:>10}")
+    print(f"\n  total {rep['total_min']:g} min, {rep['total_km']:g} km")
+    print("  Reported only. This does NOT relax a volume band or license leg-volume")
+    print("  advice - the outdoor cycling and running are still largely outside this log.")
+
+
 # ---------------------------------------------------------------- sync (store -> log)
 
 def store_rows(doc: dict, lib: dict) -> list[tuple]:
@@ -1208,12 +1334,36 @@ def store_rows(doc: dict, lib: dict) -> list[tuple]:
             for n, v in enumerate(sets, 1):
                 rir = v.get("rir")
                 out.append((date_s, "strength", ex, n,
-                            v.get("w"), v.get("r"), "" if rir is None else rir, ""))
+                            v.get("w"), v.get("r"), "" if rir is None else rir, "", "", ""))
+
+    # Cardio. The app names its types in title case ("Outdoor run"); the log wants a
+    # canonical name, so each goes through the SAME alias resolution as any typed
+    # exercise - no private mapping table that could drift from exercises.yaml.
+    cardio = doc.get("cardio") or []
+    per_day: dict[tuple[str, str], int] = {}
+    for c in sorted(cardio, key=lambda x: (str(x.get("date")), str(x.get("type")))):
+        raw = str(c.get("type", "")).strip()
+        name = raw if raw in lib else resolve_exercise(raw, lib)
+        date_s = str(c.get("date"))
+        key = (date_s, name or raw)
+        per_day[key] = per_day.get(key, 0) + 1
+        km = c.get("km")
+        out.append((date_s, "cardio", name or raw, per_day[key],
+                    "", "", "", "", c.get("min"), "" if km in (None, 0) else km))
+
+    # log.csv is append-only and warns when a date goes backwards, so the two streams
+    # are merged into ONE chronological order rather than strength-then-cardio. Python's
+    # sort is stable, so set_no order inside a (date, exercise) survives.
+    out.sort(key=lambda r: r[0])
     return out
 
 
 def sync_plan(doc: dict, rows: list[Set], lib: dict) -> dict:
     """What a sync WOULD write. Never writes.
+
+    `rows` must be the log read with kind="all". Everywhere else in this file rows are
+    strength-only by design, but the skip check needs BOTH kinds: fed strength rows, an
+    already-synced cardio row looks new on every run and gets appended again.
 
     A (date, exercise) pair already in log.csv is skipped WHOLE and reported. The store
     has no per-set id, so there is no way to tell set 3 of a re-opened session from a
@@ -1280,8 +1430,13 @@ def print_sync(plan: dict, before: int, after: int, applied: bool, log_path: str
     for d, ex in plan["skip"]:
         print(f"SKIP     {d}  {ex} already in log.csv - state any correction out loud, one row at a time")
     for r in plan["add"]:
-        rir = f" @{r[6]}" if r[6] != "" else ""
-        print(f"{'ADDED' if applied else 'WOULD ADD'}  {r[0]}  {r[2]} s{r[3]}  {r[4]} x {r[5]}{rir}")
+        head = "ADDED" if applied else "WOULD ADD"
+        if r[1] == "cardio":
+            km = f" · {r[9]} km" if r[9] not in ("", None) else ""
+            print(f"{head}  {r[0]}  {r[2]}  {r[8]} min{km}")
+        else:
+            rir = f" @{r[6]}" if r[6] != "" else ""
+            print(f"{head}  {r[0]}  {r[2]} s{r[3]}  {r[4]} x {r[5]}{rir}")
     n = len(plan["add"])
     if not n:
         if plan["unknown"]:
@@ -1299,7 +1454,7 @@ def print_sync(plan: dict, before: int, after: int, applied: bool, log_path: str
 
 COMMANDS = ["validate", "volume", "today", "prescribe", "progression", "index",
             "bridge", "stalls", "balance", "adherence", "report", "json",
-            "plans", "bands", "sync"]
+            "plans", "bands", "sync", "cardio"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1345,7 +1500,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             with open(args.src) as fh:
                 doc = json.load(fh)
-            plan = sync_plan(doc, rows, lib)
+            # kind="all" deliberately: see sync_plan's docstring. `rows` above is
+            # strength-only and would make every cardio row look unsynced forever.
+            plan = sync_plan(doc, load_log(args.log, lib, cfg, kind="all", warn=False), lib)
             # Validate BEFORE writing, through the same loader `validate` uses. A row
             # that would not load must never reach the system of record.
             after = sync_validate(args.log, plan["add"], lib, cfg) if plan["add"] else rows
@@ -1354,6 +1511,9 @@ def main(argv: list[str] | None = None) -> int:
             print_sync(plan, len(rows), len(after), args.apply, args.log)
             if plan["unknown"]:
                 return 2
+        elif args.command == "cardio":
+            print_cardio(cardio_report(
+                load_log(args.log, lib, cfg, kind="cardio", warn=False), weeks=8))
         elif args.command == "validate":
             np = len(routine["plans"])
             print(f"OK: {args.log} - {len(rows)} working sets, "

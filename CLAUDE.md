@@ -39,19 +39,24 @@ widened - see the comments in config.yaml. The week is still 156 sets.
 | `routine.yaml` | the plans - one or more weekly plans, plus the `schedule` saying which was active from when. Source of truth for "what should happen"; bands in config.yaml are derived from it |
 | `config.yaml` | volume target bands (derived from routine.yaml), progression rule, thresholds |
 | `analyze.py` | all analytics: loader, volume, prescribe, progression, index, bridge, stalls, balance, adherence |
-| `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks - the example log is real output of the real rule, not hand-typed |
+| `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks. **BROKEN since the gym80 machines landed** - see below |
 | `log.example.csv` | 12 weeks of generated history, for DEMOING the analytics. Never what gets deployed - see below |
 | `web/` | the deployed phone app - Session / Cardio / Progress / Plan / History, live on Vercel. See **The web app** below |
 
 ## Schema
 
 ```
-date,type,exercise,set_no,weight_kg,reps,rir,notes
+date,type,exercise,set_no,weight_kg,reps,rir,notes,duration_min,distance_km
 ```
 
 - `date` ISO `YYYY-MM-DD`.
-- `type` `strength` | `cardio`. Cardio is unused in v1; the column exists so adding it
-  later is not a migration. The loader rejects `cardio` rows today.
+- `type` `strength` | `cardio`. **Cardio landed on 2026-09-27**, when `log.csv` was still
+  empty - which made it the cheapest it would ever be. `type` and the library must agree:
+  a `cardio` row must name an entry marked `cardio: true` in `exercises.yaml`, and a
+  `strength` row must not. The loader refuses either mismatch.
+- `duration_min`, `distance_km` are **cardio only** and must be EMPTY on a strength row.
+  `duration_min` is required on a cardio row (>= 0.5); `distance_km` is optional.
+  A cardio row carries no `weight_kg`, `reps` or `rir` - the loader refuses them.
 - `exercise` canonical name from `exercises.yaml`. Never an alias, never free text.
 - `set_no` 1-based, within (date, exercise). Unique.
 - `weight_kg` per dumbbell for DB work. `0` for a bodyweight set. For bodyweight
@@ -69,6 +74,10 @@ date,type,exercise,set_no,weight_kg,reps,rir,notes
 - **Bodyweight sets** (`weight_kg == 0`) have no meaningful e1RM. Track them by reps.
   Exclude them from e1RM trends rather than letting a zero fake a slope.
 - **Hard set** = any working set. If RIR is present, only RIR <= 3 counts.
+- **Cardio is in no metric.** `load_log()` returns STRENGTH rows by default, so every
+  analytic that has ever called it keeps receiving strength sets and nothing else. That
+  default IS the guarantee - nothing downstream filters, because nothing downstream ever
+  sees a cardio row. Ask for `kind="cardio"` or `kind="all"` deliberately.
 - **Windows** = rolling 7 and 14 days back from the last logged date. Not calendar weeks.
 
 These definitions live here and in `analyze.py`. If they ever disagree, that is a bug -
@@ -269,7 +278,11 @@ recomputes a deep metric in JavaScript.
   there is no way to tell set 3 of a re-opened session from a duplicate of set 3, and a
   silent duplicate in the system of record is far worse than a skip you are told about.
   Get the input from the app: **History -> Download for log.csv**. Run
-  `python3 web/build_data.py` afterwards.
+  `python3 web/build_data.py` afterwards. Strength and cardio are merged into ONE
+  chronological stream before appending, so a cardio row never lands before the strength
+  row above it and trips the append-only warning.
+- `python3 analyze.py cardio` - weekly cardio minutes and km, and a per-type total.
+  **Reported, never inferred from**: no trend, no target band, no verdict. See below.
 
 ## The handoff override - 2026-09-27
 
@@ -324,6 +337,7 @@ branch.
 | `web/api/log.js` | the store of record on Vercel, backed by Vercel Blob |
 | `web/manifest.webmanifest`, `icon*.png/svg` | installs to the phone home screen |
 | `tests/check.sh` | every check a syntax pass cannot do. Run it before pushing `web/` or `analyze.py` |
+| `tests/cardio_isolation.py` | cardio reaches `log.csv`, and asserts it cannot reach a strength number |
 | `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
 | `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
 
@@ -393,6 +407,49 @@ store yet), the RIR row (no load could otherwise ever increase), and
 three-tab app. They are stale as of this handoff and the artifact still runs the old
 code. Rebuild them or retire them deliberately - do not assume the live artifact matches
 `web/`.
+
+## `seed_example.py` is broken, and was before the handoff
+
+`python3 seed_example.py` dies with `KeyError: 'seated_chest_press_machine'`. Its
+`START_LOAD` table knows 15 lifts; the routine now plans 29, so **16 are missing** - it
+has been broken since the gym80 machines were added on 2026-09-11/12 and nobody re-ran
+it. Confirmed against an unmodified checkout, so it is not fallout from the redesign.
+
+Consequence: `log.example.csv` cannot currently be regenerated. When the cardio columns
+were added on 2026-09-27 it was migrated in place instead - two empty fields appended to
+each of its 883 rows, no value invented. That is acceptable for a generated demo file and
+would not be for `log.csv`.
+
+Fixing it means choosing a plausible start load for 16 machines. Those are demo numbers
+and not prescriptions, so the "never guess an increment" rule does not bite - but they
+are still invented, so ask before adding them rather than filling the table in quietly.
+
+## Cardio - recorded, not yet trusted
+
+The schema, the library entries (`treadmill`, `bike`, `elliptical`, `outdoor_run`, all
+marked `cardio: true`), the sync path and `analyze.py cardio` all exist as of
+2026-09-27. What does NOT exist is permission to conclude anything from them.
+
+The reason is completeness, not principle. The training context is 30-50 km/week of
+cycling and running; the app captures gym cardio plus an outdoor run. **A partial cardio
+record that looked authoritative would be worse than none** - it would show lightly
+loaded legs, and every derivation built on it would be confidently wrong. So until the
+record is complete enough to trust:
+
+- cardio reaches no strength derivation (structurally - see Metrics),
+- the lower-body bands stay conservative,
+- the two failing balance bands stay as they are,
+- and **the leg-volume hard rule is untouched**. "There is cardio in the log now" is not
+  an argument against it; a complete record of what the legs actually carry would be.
+
+Revisit after about four weeks of consistent logging. If the record is real by then,
+rederive the lower-body bands and judge those balance bands against something true. If
+it is patchy, say so and keep the honest blind spot.
+
+`cardio: true` entries in `exercises.yaml` carry NO `muscles`, `increment` or
+`rep_range`, and `load_exercises()` refuses an entry that declares both. That is what
+makes "no prescription for cardio" structural rather than a convention. `build_data.py`
+leaves them out of `web/data.js` entirely, so a cardio lift cannot be planned in the app.
 
 ## Volume accounting
 

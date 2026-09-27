@@ -93,8 +93,11 @@ def main() -> int:
                     rir = max(0, min(4, int(round(2 - i * 0.9 + rng.uniform(-0.4, 0.4)))))
                 line += 1
                 rows.append(A.Set(line, d, "strength", ex_name, i + 1, load, reps, rir, ""))
+                # duration_min and distance_km are cardio-only and stay empty on every
+                # strength row - the loader refuses a value in them.
                 out.append([d.isoformat(), "strength", ex_name, i + 1,
-                            f"{load:g}", reps, rir, "bad session" if bad_day and i == 0 else ""])
+                            f"{load:g}", reps, rir,
+                            "bad session" if bad_day and i == 0 else "", "", ""])
         d += dt.timedelta(days=1)
 
     path = os.path.join(HERE, "log.example.csv")

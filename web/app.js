@@ -856,8 +856,8 @@ function renderHistory() {
       <div><div class="kicker">All sessions</div><h1>${all.length} logged</h1></div>
       <div class="right"><div class="count">${totalT.toFixed(1)}<span>t</span></div><div class="caption">total load</div></div>
     </div>
-    ${Object.keys(state.sessions).length ? `<button class="btn ghost" data-act="export-store">
-      Download for log.csv</button>` : ""}
+    ${Object.keys(state.sessions).length || state.cardio.length
+      ? `<button class="btn ghost" data-act="export-store">Download for log.csv</button>` : ""}
     ${all.length ? all.slice(0, 60).map((s) => {
       const open = state.openSession === s.date;
       return `<div class="sessrow">
@@ -1236,7 +1236,12 @@ function logCardio() {
 // and appending to it is a deliberate, reviewed act. So it hands over exactly what
 // `analyze.py sync` reads, and the CLI does the appending, dry-run first.
 function exportStore() {
-  const doc = { v: 4, exported_at: new Date().toISOString(), sessions: state.sessions };
+  // Cardio goes too: analyze.py sync reads both, resolves the app's title-case type
+  // ("Outdoor run") through exercises.yaml's aliases, and writes cardio rows.
+  const doc = {
+    v: 4, exported_at: new Date().toISOString(),
+    sessions: state.sessions, cardio: state.cardio,
+  };
   const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 1)], { type: "application/json" }));
   const a = document.createElement("a");
   a.href = url;

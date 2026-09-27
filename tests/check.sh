@@ -17,6 +17,12 @@ python3 -c "import ast,sys;ast.parse(open('analyze.py').read())" && echo "OK"
 echo "--- log.csv validates ---"
 python3 analyze.py validate
 
+echo "--- log.example.csv validates ---"
+python3 analyze.py validate --log log.example.csv
+
+echo "--- cardio reaches log.csv and cannot reach a strength number ---"
+python3 tests/cardio_isolation.py
+
 ( cd web && python3 -m http.server "$PORT" >/dev/null 2>&1 & echo $! > /tmp/check_srv.pid )
 sleep 2
 trap 'kill "$(cat /tmp/check_srv.pid)" 2>/dev/null || true' EXIT

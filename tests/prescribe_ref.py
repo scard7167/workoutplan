@@ -13,15 +13,19 @@ import csv, os, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
+sys.path.insert(0, ROOT)
 from prescribe_cases import CASES                                    # noqa: E402
+import analyze as A                                                  # noqa: E402
 
 for i, (ex, sets) in enumerate(CASES):
     path = os.path.join(tempfile.gettempdir(), f"prescribe_case{i}.csv")
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["date", "type", "exercise", "set_no", "weight_kg", "reps", "rir", "notes"])
+        # A.HEADER, not a literal: a column added to the schema must not break this.
+        w.writerow(A.HEADER)
         for n, (kg, reps, rir) in enumerate(sets, 1):
-            w.writerow(["2026-09-20", "strength", ex, n, kg, reps, "" if rir is None else rir, ""])
+            row = ["2026-09-20", "strength", ex, n, kg, reps, "" if rir is None else rir, ""]
+            w.writerow(row + [""] * (len(A.HEADER) - len(row)))
     r = subprocess.run([sys.executable, os.path.join(ROOT, "analyze.py"), "prescribe",
                         "--log", path, "--exercise", ex],
                        capture_output=True, text=True, cwd=ROOT)

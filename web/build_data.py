@@ -29,7 +29,9 @@ LOG_PATH = os.path.join(ROOT, LOG_NAME)
 
 lib = yaml.safe_load(open(os.path.join(ROOT, "exercises.yaml")))
 cfg = yaml.safe_load(open(os.path.join(ROOT, "config.yaml")))
-rows = list(csv.DictReader(open(LOG_PATH)))
+# Strength rows only: the web app's derivations are all strength, and a cardio row has
+# no weight or reps to give them. `analyze.py cardio` is where cardio is reported.
+rows = [r for r in csv.DictReader(open(LOG_PATH)) if r["type"] == "strength"]
 # The routine goes through analyze.py's loader rather than straight from YAML: that is
 # where the single-plan and multi-plan shapes are normalised and validated, and the app
 # must see exactly the plans analyze.py sees or the two disagree about what the plan is.
@@ -64,10 +66,14 @@ for name, v in lib.items():
     if "image" in v and not os.path.exists(os.path.join(ROOT, "web", v["image"])):
         sys.exit(f"exercises.yaml: {name} image {v['image']!r} does not exist under web/")
 
+# Cardio entries are left out entirely: they have no muscles, increment or rep_range,
+# and the web app only ever asks the library for a prescription or a prime mover. A
+# cardio lift appearing in the Plan tab's library search would be a lift you could plan
+# and never log.
 ex = {k: {"aliases": v["aliases"], "muscles": v["muscles"], "increment": v["increment"],
           "rep_range": v["rep_range"], "bodyweight": bool(v.get("bodyweight")),
           **({"image": v["image"]} if "image" in v else {})}
-      for k, v in lib.items()}
+      for k, v in lib.items() if not v.get("cardio")}
 
 EX_JSON = json.dumps(ex, separators=COMPACT)
 BAND_JSON = json.dumps(cfg["volume_targets"], separators=COMPACT)

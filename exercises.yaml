@@ -387,3 +387,36 @@ back_pull_machine:
   increment: 5   # UNVERIFIED, see incline_chest_press_machine
   rep_range: [8, 12]
   image: images/back_pull_machine.jpg
+
+# ---------------------------------------------------------------------------- cardio
+#
+# Cardio entries are a DIFFERENT KIND of thing and are marked `cardio: true`. They carry
+# no muscles, no increment and no rep_range - deliberately, and load_exercises() refuses
+# an entry that has both `cardio: true` and any of them. Consequences, all intended:
+#
+#   - no prescription. The progression rule is about load; there is no load here.
+#   - no hard sets, no e1RM, no volume band, no place in any strength derivation.
+#     load_log() returns strength rows only, so a cardio row cannot reach them at all.
+#   - REPORTED, never inferred from. `analyze.py cardio` prints weekly minutes and km
+#     and stops there. The cycling and running this log has never seen are still not
+#     a reason to change a band or recommend leg volume - see CLAUDE.md. That waits
+#     until the record is complete enough to be worth trusting.
+#
+# Added 2026-09-27 so the web app's Cardio tab has somewhere to land. log.csv was empty,
+# which made this the cheapest moment it will ever be.
+
+treadmill:
+  cardio: true
+  aliases: [treadmill, tread, laufband]
+
+bike:
+  cardio: true
+  aliases: [bike, cycling, cycle, ride, spin, ergometer, fahrrad, rad]
+
+elliptical:
+  cardio: true
+  aliases: [elliptical, crosstrainer, cross trainer, x-trainer]
+
+outdoor_run:
+  cardio: true
+  aliases: [outdoor run, run, running, jog, jogging, road run, laufen]
