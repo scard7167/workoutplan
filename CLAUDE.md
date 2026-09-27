@@ -136,10 +136,26 @@ Rule 1 cannot go below 0 - hold at bodyweight and lower the rep target instead.
 No load ever comes from anywhere else. Not from feel, not from a round number, not from
 what the plates suggest. If the rule produces 62.5 kg, the prescription is 62.5 kg.
 
-`analyze.py prescribe()` is the programmatic statement of this rule and is **not built
-yet**. Mid-session, apply the rule above as a lookup against `current_session.md` and the
-most recent prior session in `log.csv` - that is arithmetic on two numbers, not analytics.
-When `prescribe()` lands it must produce identical output; it is the referee.
+`analyze.py prescribe()` is the programmatic statement of this rule and **is built** -
+`python3 analyze.py prescribe --exercise NAME [--log FILE]`. It is the referee: anything
+else that produces a load must agree with it exactly, including the two rules that are
+easy to miss. **A mid-session load change carries the LAST set's load forward**, not the
+first. **A lift with no prior session gets NO load** - the rule never invents a starting
+one, and neither may any caller.
+
+`web/app.js` carries a second copy, because the phone has no Python. It is checked
+against the referee over twelve cases covering every branch - no baseline, hold, progress,
+blank RIR, deload, deload rounding, mid-session change, bodyweight hold, bodyweight
+progress, bodyweight deload floor, a 15-rep ceiling and RIR above the ceiling - by
+seeding the same history into the app and reading the load off the log sheet. All twelve
+agree. Re-run that check after touching either copy; four of the twelve failed the first
+time it was run:
+
+    python3 tests/prescribe_ref.py
+    (cd web && python3 -m http.server 8080 &) && PW_ROOT=/tmp/pw node tests/prescribe_app.mjs 8080
+
+Playwright is deliberately NOT in `web/package.json` - that file is what Vercel installs.
+Install it anywhere and point `PW_ROOT` at it.
 
 ## Session protocol
 
@@ -279,6 +295,7 @@ branch.
 | `web/data.js` | GENERATED - the library, the plans, the bands and the log.csv rows |
 | `web/api/log.js` | the store of record on Vercel, backed by Vercel Blob |
 | `web/manifest.webmanifest`, `icon*.png/svg` | installs to the phone home screen |
+| `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
 
 ### Where a logged session lives
 

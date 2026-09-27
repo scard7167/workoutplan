@@ -9,7 +9,7 @@
 // that is the repo's double-progression rule, because no load may come from anywhere
 // else. The design is unaffected - it is still a stepper with a number in it.
 
-import { EXERCISES, PLANS, ACTIVE_PLAN, SEED_LOG, BUILD } from "./data.js";
+import { EXERCISES, PLANS, ACTIVE_PLAN, SEED_LOG, PROGRESSION, BUILD } from "./data.js";
 
 /* ------------------------------------------------------------------ constants */
 
@@ -289,25 +289,44 @@ function kpiView() {
 }
 
 // The double-progression rule. The ONE load source in the app.
+//
+// `analyze.py prescribe()` is the referee and this must agree with it EXACTLY, so the
+// thresholds come from config.yaml via PROGRESSION rather than being written twice, and
+// every branch below mirrors a numbered rule in that docstring. A null `w` means "no
+// baseline": the rule refuses to invent a starting load, and so must this - an empty
+// log.csv would otherwise open every lift at 0 kg and log zeros.
 function prescribe(ex) {
   const lib = libOf(ex);
-  if (!lib || lib.increment == null) return { needs: true, w: 0, r: 8 };
+  if (!lib || lib.increment == null) return { needs: true, w: null, r: 8 };
   const [floor, ceil] = lib.rep_range;
   const inc = lib.increment;
   const hist = allSets().filter((s) => s.ex === ex);
-  if (!hist.length) return { w: 0, r: floor, why: "no baseline" };
+  if (!hist.length) return { w: null, r: floor, why: "no baseline" };
   const lastDate = hist[hist.length - 1].date;
   const lastSets = hist.filter((s) => s.date === lastDate);
-  const w = lastSets[0].w;
+  // Rule 6: a mid-session load change carries the LAST set's load forward, not the first.
+  const w = lastSets[lastSets.length - 1].w;
+
+  // Rule 2, checked first.
   if (lastSets.some((s) => s.reps < floor && s.rir === 0)) {
-    const dropped = Math.max(0, Math.floor((w * 0.9) / inc) * inc);
+    // Rule 5: a bodyweight lift cannot go below 0 - hold and cut the rep target.
+    if (w === 0) return { w: 0, r: Math.max(1, floor - 2), why: "deload floor" };
+    const dropped = roundDownTo(w * (1 - PROGRESSION.deload_pct), inc);
     return { w: dropped, r: floor, why: "deload" };
   }
-  if (lastSets.every((s) => s.reps >= ceil && s.rir != null && s.rir <= 2)) {
-    return { w: +(w + inc).toFixed(2), r: floor, why: "progress" };
+  // Rule 3. A blank RIR does not qualify - unverified is not proven.
+  if (lastSets.every((s) => s.reps >= ceil && s.rir != null && s.rir <= PROGRESSION.rir_ceiling)) {
+    return { w: +(w + inc).toFixed(4), r: floor, why: "progress" };
   }
+  // Rule 4.
   const best = Math.max(...lastSets.map((s) => s.reps));
   return { w, r: Math.min(ceil, best + 1), why: "hold" };
+}
+
+// analyze.py's round_down, epsilon and all: round(floor((kg + 1e-9) / inc) * inc, 4).
+function roundDownTo(kg, inc) {
+  if (!inc) return kg;
+  return +(Math.floor((kg + 1e-9) / inc) * inc).toFixed(4);
 }
 
 /* ------------------------------------------------------ effective day / session */
@@ -872,6 +891,7 @@ function sheetHtml() {
   const done = L.logged[ex] || [];
   const lib = libOf(ex);
   const needs = !lib || lib.increment == null;
+  const p = prescribe(ex);
   return `<div class="sheet" role="dialog" aria-modal="true">
     <span class="handle"></span>
     <div class="sheethead">
@@ -885,18 +905,23 @@ function sheetHtml() {
     <div class="grid2">
       <div class="stepper"><span class="label">Weight · kg</span><div class="row">
         <button class="step" data-act="w" data-d="-2.5" aria-label="less"><span>−</span></button>
-        <input class="val mono" id="s-w" inputmode="decimal" value="${state.w}">
+        <input class="val mono" id="s-w" inputmode="decimal" placeholder="—" value="${state.w == null ? "" : state.w}">
         <button class="step" data-act="w" data-d="2.5" aria-label="more"><span>+</span></button></div></div>
       <div class="stepper"><span class="label">Reps</span><div class="row">
         <button class="step" data-act="r" data-d="-1" aria-label="fewer"><span>−</span></button>
         <input class="val mono" id="s-r" inputmode="numeric" value="${state.r}">
         <button class="step" data-act="r" data-d="1" aria-label="more"><span>+</span></button></div></div>
     </div>
-    <p class="meta" style="margin:-4px 0 0">Steppers move 2.5 kg and 1 rep. Tap a number to type it.</p>`}
+    <p class="meta" style="margin:-4px 0 0">${state.w == null
+      ? `No prior session, so the rule gives no load - it never invents a starting one. Type the weight you are using; target ${state.r} reps.`
+      : `${{ deload: "Deload: ", "deload floor": "Deload, and already at bodyweight, so the rep target drops instead: ",
+              progress: "Progress: ", "no baseline": "" }[p.why] || ""}the rule asks ${
+              p.w === 0 && isBW(ex) ? "bodyweight" : `${p.w} kg`} × ${p.r}. Steppers move 2.5 kg and 1 rep; tap a number to type it.`}</p>`}
     ${done.length ? `<div class="setlist">${done.map((v, i) =>
       `<div class="r"><span class="k">set ${i + 1}</span><span class="v">${v.w} × ${v.r}</span></div>`).join("")}</div>` : ""}
     <div style="display:flex;gap:9px">
-      <button class="btn primary" data-act="log-set" ${needs ? "disabled" : ""}>Log set ${done.length + 1} · ${state.w} × ${state.r}</button>
+      <button class="btn primary" data-act="log-set" ${needs || state.w == null ? "disabled" : ""}>${
+        state.w == null ? "Enter the weight" : `Log set ${done.length + 1} · ${state.w} × ${state.r}`}</button>
       <button class="btn sm" data-act="extra-set" style="flex:none">+1 set</button>
     </div>
   </div>`;
@@ -1056,7 +1081,9 @@ function liftHtml() {
     <div class="nextrow"><span class="tag${row.status === "progressing" ? " on" : ""}">${esc(row.status || "no call")}</span>
       <span class="t">${esc(call)}</span></div>
     <div class="nextrow"><span class="tag">next</span>
-      <span class="t">The rule prescribes <b>${p.w} kg × ${p.r}</b>${p.why ? ` (${p.why})` : ""}.</span></div>
+      <span class="t">${p.w == null
+        ? `No prior session, so the rule gives no load - target ${p.r} reps at a weight you choose.`
+        : `The rule prescribes <b>${p.w} kg × ${p.r}</b>${p.why ? ` (${p.why})` : ""}.`}</span></div>
   </div>`;
 }
 
@@ -1138,7 +1165,7 @@ function saveRename() {
 function logSet() {
   const ex = state.sheet, L = ensureLive();
   const lib = libOf(ex);
-  if (!lib || lib.increment == null) return;
+  if (!lib || lib.increment == null || state.w == null) return;
   const logged = { ...L.logged };
   logged[ex] = (logged[ex] || []).concat([{ w: state.w, r: state.r }]);
   L.logged = logged;
@@ -1152,7 +1179,10 @@ function openSheet(ex) {
   const p = prescribe(ex);
   const L = ensureLive();
   const already = (L.logged[ex] || []);
-  const seed = already.length ? already[already.length - 1] : { w: p.w, r: p.r };
+  // The rule refuses to invent a starting load, so a lift with no history opens EMPTY -
+  // except a bodyweight lift, where 0 added load is the real bar, not a guess.
+  const seed = already.length ? already[already.length - 1]
+    : { w: p.w == null && isBW(ex) ? 0 : p.w, r: p.r };
   setState({ sheet: ex, w: seed.w, r: seed.r }, { persist: false });
 }
 
@@ -1229,7 +1259,13 @@ document.addEventListener("click", (e) => {
     case "close-summary": closeSummary(); break;
     case "go-cardio": setState({ tab: "Cardio", cWhen: "visit" }, { persist: false }); break;
     // log sheet
-    case "w": setState({ w: Math.max(0, +(state.w + num(t.dataset.d)).toFixed(1)) }, { persist: false }); break;
+    case "w": {
+      const inc = (libOf(state.sheet) || {}).increment || 2.5;
+      const base = state.w == null ? (num(t.dataset.d) > 0 ? inc - num(t.dataset.d) : null) : state.w;
+      if (base == null) break;
+      setState({ w: Math.max(0, +(base + num(t.dataset.d)).toFixed(2)) }, { persist: false });
+      break;
+    }
     case "r": setState({ r: Math.max(1, state.r + num(t.dataset.d)) }, { persist: false }); break;
     case "log-set": logSet(); break;
     case "extra-set": {
@@ -1303,7 +1339,11 @@ document.addEventListener("click", (e) => {
 // a full renderAll.
 document.addEventListener("input", (e) => {
   const el = e.target;
-  if (el.id === "s-w") { state.w = Math.max(0, parseFloat(el.value) || 0); syncSheetLabel(); }
+  if (el.id === "s-w") {
+    const v = parseFloat(el.value);
+    state.w = el.value.trim() === "" || isNaN(v) ? null : Math.max(0, v);
+    syncSheetLabel();
+  }
   else if (el.id === "s-r") { state.r = Math.max(1, parseInt(el.value, 10) || 1); syncSheetLabel(); }
   else if (el.id === "c-min") { state.cMin = el.value.replace(/[^0-9]/g, ""); }
   else if (el.id === "c-km") { state.cKm = el.value.replace(",", ".").replace(/[^0-9.]/g, ""); }
@@ -1329,8 +1369,10 @@ document.addEventListener("keydown", (e) => {
 
 function syncSheetLabel() {
   const b = document.querySelector('[data-act="log-set"]');
+  if (!b) return;
   const n = (state.live && state.live.logged[state.sheet] || []).length + 1;
-  if (b) b.textContent = `Log set ${n} · ${state.w} × ${state.r}`;
+  b.disabled = state.w == null;
+  b.textContent = state.w == null ? "Enter the weight" : `Log set ${n} · ${state.w} × ${state.r}`;
 }
 
 /* ----------------------------------------------------------------------- boot */
