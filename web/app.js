@@ -37,6 +37,12 @@ const COV = {
 const covStatus = (n) => (n <= 3 ? "missed" : n <= 9 ? "minimum" : n <= 20 ? "optimal" : "high");
 
 const CARDIO_TYPES = ["Treadmill", "Bike", "Elliptical", "Outdoor run"];
+// The canonical names those four resolve to in exercises.yaml. analyze.py resolves them
+// through the real alias map; this is only so the pasted rows already read correctly.
+const CARDIO_CANON = {
+  "Treadmill": "treadmill", "Bike": "bike",
+  "Elliptical": "elliptical", "Outdoor run": "outdoor_run",
+};
 const MUSCLE_PILLS = ["chest", "lats", "upper_back", "lower_back", "side_delts", "front_delts",
   "rear_delts", "biceps", "triceps", "hamstrings", "quads", "glutes", "calves", "core"];
 
@@ -110,15 +116,75 @@ const store = {
   },
 };
 
+// ------------------------------------------------------ local durability
+//
+// Until a Blob store exists, the phone IS the store, so one copy in localStorage is not
+// good enough. Three things harden it, all client-side and needing nothing from Vercel:
+//
+//   1. navigator.storage.persist() asks the browser to exempt this origin from
+//      eviction under storage pressure. An installed PWA is usually granted it.
+//   2. Every write also goes to IndexedDB. It is a SEPARATE quota and eviction path
+//      from localStorage, so the two rarely die together, and boot takes whichever
+//      copy is newer.
+//   3. `storage` is reported honestly in the header - "persisted", "local" or
+//      "unsaved" - because a log that quietly is not saving is the one thing this app
+//      cannot do.
+
+const IDB_DB = "strengthlog";
+const IDB_STORE = "state";
+let persisted = null;          // null = not asked yet, true/false = the browser's answer
+
+function idb() {
+  return new Promise((res, rej) => {
+    if (!self.indexedDB) return rej(new Error("no indexedDB"));
+    const r = indexedDB.open(IDB_DB, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+
+async function idbPut(doc) {
+  const db = await idb();
+  await new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(doc, LS);
+    tx.oncomplete = res;
+    tx.onerror = () => rej(tx.error);
+  });
+  db.close();
+}
+
+async function idbGet() {
+  const db = await idb();
+  const doc = await new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const q = tx.objectStore(IDB_STORE).get(LS);
+    q.onsuccess = () => res(q.result || null);
+    q.onerror = () => rej(q.error);
+  });
+  db.close();
+  return doc;
+}
+
 let pushTimer = null;
-function persist(push = true) {
-  const doc = {
+function snapshot() {
+  return {
     v: 4, updated_at: new Date().toISOString(),
     sessions: state.sessions, cardio: state.cardio, live: state.live,
     plans: state.plans, base: state.base, custom: state.custom,
     planKey: state.planKey, sessionPlanKey: state.sessionPlanKey,
   };
-  try { localStorage.setItem(LS, JSON.stringify(doc)); } catch { /* private mode */ }
+}
+
+function persist(push = true) {
+  const doc = snapshot();
+  let localOk = false;
+  try { localStorage.setItem(LS, JSON.stringify(doc)); localOk = true; } catch { /* private mode, quota */ }
+  // Deliberately not awaited: a set must never wait on a write. A failure here is
+  // reported by the next renderHeader, not swallowed.
+  idbPut(doc).then(() => { if (!localOk) renderHeader(); })
+    .catch(() => { if (!localOk) { store.detail = "neither store accepted the write"; renderHeader(); } });
   if (!push) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(() => store.push(doc), 1200);
@@ -126,6 +192,25 @@ function persist(push = true) {
 
 function readLocal() {
   try { return JSON.parse(localStorage.getItem(LS) || "null"); } catch { return null; }
+}
+
+// Whichever local copy is newer. A cleared localStorage recovers from IndexedDB and
+// vice versa; only losing both loses the log.
+async function readLocalBest() {
+  const a = readLocal();
+  let b = null;
+  try { b = await idbGet(); } catch { /* no IDB */ }
+  if (!a) return b;
+  if (!b) return a;
+  return (b.updated_at || "") > (a.updated_at || "") ? b : a;
+}
+
+async function askPersist() {
+  try {
+    if (!navigator.storage?.persist) return;
+    persisted = await navigator.storage.persisted?.() || false;
+    if (!persisted) persisted = await navigator.storage.persist();
+  } catch { persisted = null; }
 }
 
 /* ------------------------------------------------------------------- the state */
@@ -380,16 +465,30 @@ function renderHeader() {
   if (state.tab === "Cardio") meta = `${plural(state.cardio.length, "cardio session")}`;
   else if (state.tab === "Plan") meta = dirty ? `${plural(dirty, "unpublished edit")}` : "plan published";
   else meta = `${n} session${n === 1 ? "" : "s"} · ${sets.length} sets`;
-  const sync = store.state === "synced" ? "" : store.state === "error" ? " · offline" : " · local only";
-  $("hmeta").textContent = meta + sync;
+  let where;
+  if (store.state === "synced") where = "";
+  else if (store.state === "error") where = " · offline";
+  else if (persisted === true) where = " · on this phone";
+  else where = " · local only";
+  $("hmeta").textContent = meta + where;
 }
 
-const storeBanner = () => (store.state === "synced" ? "" : `
-  <div class="banner"><span class="tag">local</span><div>
-    <b>Saved on this phone only.</b> ${store.detail === "not_configured"
-    ? "Connect a Blob store to this Vercel project and every session syncs across devices."
-    : "The store could not be reached - sets are queued here and go up on the next load."}
-  </div></div>`);
+const storeBanner = () => {
+  if (store.state === "synced") return "";
+  if (store.detail === "neither store accepted the write") {
+    return `<div class="banner"><span class="tag">unsaved</span><div>
+      <b>Nothing is saving.</b> Both local stores refused the write - private browsing, or
+      the device is out of space. Sets you log now will be lost on reload.</div></div>`;
+  }
+  const dur = persisted === true
+    ? "Held in two local stores and the browser has been asked not to evict them, so it survives a reload and a restart."
+    : "Held in two local stores on this device. Add the app to your home screen and the browser stops evicting them.";
+  return `<div class="banner"><span class="tag">${persisted === true ? "on device" : "local"}</span><div>
+    <b>Saved on this phone.</b> ${dur} ${store.detail === "not_configured"
+      ? "Connect a Blob store to this Vercel project for cross-device sync."
+      : "The remote store could not be reached; sets go up on the next load."}
+  </div></div>`;
+};
 
 /* ------------------------------------------------------------------- 1 Session */
 
@@ -856,8 +955,10 @@ function renderHistory() {
       <div><div class="kicker">All sessions</div><h1>${all.length} logged</h1></div>
       <div class="right"><div class="count">${totalT.toFixed(1)}<span>t</span></div><div class="caption">total load</div></div>
     </div>
-    ${Object.keys(state.sessions).length || state.cardio.length
-      ? `<button class="btn ghost" data-act="export-store">Download for log.csv</button>` : ""}
+    ${Object.keys(state.sessions).length || state.cardio.length ? `
+      <button class="btn primary" data-act="copy-rows">Copy rows for log.csv</button>
+      <pre id="rowsout" class="mono" hidden style="white-space:pre-wrap;word-break:break-all;font-size:10.5px;color:var(--color-neutral-400);background:var(--color-surface);padding:12px;border-radius:8px;max-height:240px;overflow:auto"></pre>
+      <button class="btn ghost" data-act="export-store">Download as a file instead</button>` : ""}
     ${all.length ? all.slice(0, 60).map((s) => {
       const open = state.openSession === s.date;
       return `<div class="sessrow">
@@ -872,7 +973,8 @@ function renderHistory() {
     }).join("") : `<div class="empty"><b>No sessions yet.</b>
       Finish a session on the Session tab and it appears here immediately.</div>`}
     <p class="foot">Tonnage is load × reps, bodyweight lifts at ${BW_KG} kg. Cardio is
-      never counted here. <b>Download for log.csv</b> saves the sessions this app holds;
+      never counted here. <b>Copy rows for log.csv</b> puts them on the clipboard, ready to
+      paste to Claude - no file needed. The download saves the same thing as JSON;
       <code>python3 analyze.py sync --from &lt;that file&gt;</code> shows what it would
       append to the real log, and <code>--apply</code> writes it. Nothing here touches
       <code>log.csv</code> on its own.</p>`;
@@ -1252,6 +1354,44 @@ function exportStore() {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
+// The rows exactly as log.csv wants them, so they can be pasted into a chat instead of
+// travelling as a file. analyze.py sync also accepts this shape via --rows.
+function logRows() {
+  const out = [];
+  const dates = Object.keys(state.sessions).sort();
+  for (const d of dates) {
+    for (const [ex, sets] of Object.entries(state.sessions[d].lifts)) {
+      sets.forEach((v, i) => out.push(
+        [d, "strength", ex, i + 1, v.w, v.r, v.rir == null ? "" : v.rir, "", "", ""].join(",")));
+    }
+  }
+  const per = {};
+  for (const c of [...state.cardio].sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    const name = CARDIO_CANON[c.type] || c.type.toLowerCase().replace(/\s+/g, "_");
+    const k = `${c.date}/${name}`;
+    per[k] = (per[k] || 0) + 1;
+    out.push([c.date, "cardio", name, per[k], "", "", "", "", c.min, c.km == null ? "" : c.km].join(","));
+  }
+  // One chronological stream, matching what analyze.py sync appends.
+  return out.sort((a, b) => (a.slice(0, 10) < b.slice(0, 10) ? -1 : a.slice(0, 10) > b.slice(0, 10) ? 1 : 0)).join("\n");
+}
+
+async function copyRows() {
+  const text = logRows();
+  const el = $("rowsout");
+  if (!text) { el.textContent = "Nothing logged yet."; el.hidden = false; return; }
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch { /* no permission */ }
+  el.textContent = (ok ? "Copied. Paste it to Claude.\n\n" : "Clipboard refused - select and copy this:\n\n") + text;
+  el.hidden = false;
+  if (!ok) {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+  }
+}
+
 function exportYaml() {
   const out = ["plans:"];
   for (const [pid, p] of Object.entries(state.plans)) {
@@ -1358,6 +1498,7 @@ document.addEventListener("click", (e) => {
     case "undo-plan": { const plans = clone(state.plans); plans[state.planKey] = clone(state.base[state.planKey]); setState({ plans }); break; }
     case "export": exportYaml(); break;
     case "export-store": exportStore(); break;
+    case "copy-rows": copyRows(); break;
     case "open-lib": setState({ libOn: true, query: "" }, { persist: false }); break;
     case "add-lift": editPlan((w) => { w[state.day] = (w[state.day] || []).concat([[v, 3]]); }); setState({ libOn: false, query: "" }); break;
     case "new-muscle": setState({ newMuscle: v }, { persist: false }); break;
@@ -1451,7 +1592,8 @@ function hydrate(doc) {
 }
 
 async function boot() {
-  const local = readLocal();
+  await askPersist();
+  const local = await readLocalBest();
   hydrate(local);
   state.day = weekdayOf(today());
   renderAll();

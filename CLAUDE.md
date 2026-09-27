@@ -277,7 +277,10 @@ recomputes a deep metric in JavaScript.
   already in `log.csv` is skipped WHOLE and reported: the store has no per-set id, so
   there is no way to tell set 3 of a re-opened session from a duplicate of set 3, and a
   silent duplicate in the system of record is far worse than a skip you are told about.
-  Get the input from the app: **History -> Download for log.csv**. Run
+  Two transports, one destination: `--from <store.json>` for the downloaded file, or
+  `--rows <file>` for text pasted out of the app's **History -> Copy rows for log.csv**
+  (one tap, no file - a download lands somewhere awkward on iOS). Both go through
+  `rows_plan()`, so they cannot diverge. Run
   `python3 web/build_data.py` afterwards. Strength and cardio are merged into ONE
   chronological stream before appending, so a cardio row never lands before the strength
   row above it and trips the append-only warning.
@@ -340,14 +343,23 @@ branch.
 | `tests/cardio_isolation.py` | cardio reaches `log.csv`, and asserts it cannot reach a strength number |
 | `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
 | `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
+| `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
 
 ### Where a logged session lives
 
 Three layers, and conflating them loses data:
 
-- **`localStorage` (`strengthlog.v4`) is the write-ahead buffer.** A set is on disk
-  before anything touches the network, because a gym with no signal is the normal case.
-  One browser, one device; a cleared cache takes it.
+- **Two local stores, not one.** `localStorage` (`strengthlog.v4`) is the write-ahead
+  buffer - a set is on disk before anything touches the network, because a gym with no
+  signal is the normal case. Every write is ALSO mirrored to IndexedDB under the same
+  key, and boot takes whichever copy has the newer `updated_at`. They are separate quota
+  and eviction paths, so a cleared `localStorage` recovers from IndexedDB and vice versa;
+  only losing both loses the log. `tests/durability.mjs` proves the recovery by wiping
+  `localStorage` outright. `navigator.storage.persist()` is requested on boot, which an
+  installed PWA is usually granted - the header then reads `on this phone` rather than
+  `local only`. If BOTH stores refuse a write the banner says **nothing is saving**,
+  because that is the one state the user must not discover later.
+  Still one device until the Blob store exists.
 - **`/api/log` is the store of record.** One JSON document, GET and PUT. It is what
   makes the log survive a cleared cache and reach a second device. It needs
   `BLOB_READ_WRITE_TOKEN` in the Vercel project; until that exists the route answers
@@ -399,7 +411,7 @@ The handoff flags these and they were NOT invented: auth/onboarding, a settings 
 Three things WERE added beyond the handoff, each because the app is unusable or dishonest
 without it: empty states and the local-only banner (`log.csv` is empty and there is no
 store yet), the RIR row (no load could otherwise ever increase), and
-**History -> Download for log.csv** (the only way sessions can reach `analyze.py`).
+**History -> Copy rows for log.csv** (the only way sessions can reach `analyze.py`).
 
 ### The published Artifact
 

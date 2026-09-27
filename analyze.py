@@ -1371,9 +1371,14 @@ def sync_plan(doc: dict, rows: list[Set], lib: dict) -> dict:
     than a skip the user is told about and can resolve by hand, out loud, which is what
     CLAUDE.md asks for anyway.
     """
+    return rows_plan(store_rows(doc, lib), rows, lib)
+
+
+def rows_plan(candidates: list[tuple], rows: list[Set], lib: dict) -> dict:
+    """The skip/unknown decision, shared by both transports so they cannot diverge."""
     have = {(s.date.isoformat(), s.exercise) for s in rows}
     add, skip, unknown = [], [], []
-    for r in store_rows(doc, lib):
+    for r in candidates:
         key = (r[0], r[2])
         if r[2] not in lib:
             unknown.append(key)
@@ -1382,6 +1387,31 @@ def sync_plan(doc: dict, rows: list[Set], lib: dict) -> dict:
         else:
             add.append(r)
     return {"add": add, "skip": sorted(set(skip)), "unknown": sorted(set(unknown))}
+
+
+def rows_from_text(text: str, lib: dict) -> list[tuple]:
+    """Parse rows pasted from the app's "Copy rows for log.csv" into sync's row shape.
+
+    Same destination as a store document, different transport: the phone can put the
+    rows on the clipboard, which is one tap, where a file download is several and lands
+    somewhere awkward on iOS. A header line is tolerated and ignored; so is any framing
+    the paste picked up (the app prefixes a "Copied." line).
+    """
+    out = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [c.strip() for c in line.split(",")]
+        if parts[0] == "date":                      # the header, if it came along
+            continue
+        if len(parts) < 8 or len(parts[0]) != 10 or parts[0][4] != "-":
+            continue                                # framing, not a row
+        parts += [""] * (len(HEADER) - len(parts))
+        out.append(tuple(parts[:len(HEADER)]))
+    if not out:
+        raise LogError("no rows found in the pasted text")
+    return out
 
 
 def sync_validate(log_path: str, add: list[tuple], lib: dict, cfg: dict) -> list[Set]:
@@ -1470,6 +1500,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=os.path.join(HERE, "web", "analytics.json"))
     ap.add_argument("--from", dest="src", default=None,
                     help="sync: the web app's store document (JSON) to read sessions from")
+    ap.add_argument("--rows", default=None,
+                    help="sync: a file of CSV rows pasted from the app's "
+                         "\"Copy rows for log.csv\", instead of --from")
     ap.add_argument("--apply", action="store_true",
                     help="sync: actually append to the log. Without it, sync is a dry run")
     args = ap.parse_args(argv)
@@ -1495,14 +1528,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "sync":
-            if not args.src:
-                print("FAIL: sync needs --from <store.json>", file=sys.stderr)
+            if not args.src and not args.rows:
+                print("FAIL: sync needs --from <store.json> or --rows <file>", file=sys.stderr)
                 return 2
-            with open(args.src) as fh:
-                doc = json.load(fh)
+            if args.src and args.rows:
+                print("FAIL: pass --from or --rows, not both", file=sys.stderr)
+                return 2
             # kind="all" deliberately: see sync_plan's docstring. `rows` above is
             # strength-only and would make every cardio row look unsynced forever.
-            plan = sync_plan(doc, load_log(args.log, lib, cfg, kind="all", warn=False), lib)
+            have = load_log(args.log, lib, cfg, kind="all", warn=False)
+            if args.rows:
+                with open(args.rows) as fh:
+                    plan = rows_plan(rows_from_text(fh.read(), lib), have, lib)
+            else:
+                with open(args.src) as fh:
+                    doc = json.load(fh)
+                plan = sync_plan(doc, have, lib)
             # Validate BEFORE writing, through the same loader `validate` uses. A row
             # that would not load must never reach the system of record.
             after = sync_validate(args.log, plan["add"], lib, cfg) if plan["add"] else rows

@@ -34,3 +34,6 @@ python3 tests/prescribe_diff.py /tmp/check_ref.txt /tmp/check_app.txt
 
 echo "--- RIR reaches the store and the next session progresses ---"
 node tests/rir_progression.mjs "$PORT" | tail -4
+
+echo "--- local durability: IndexedDB mirror, and recovery from a wiped localStorage ---"
+node tests/durability.mjs "$PORT" | grep -E "IndexedDB|after wiping|clipboard matches|ERRORS"
