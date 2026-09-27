@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 web/artifact.html
 web/analytics.json
+scratchpad/
+web/node_modules/
