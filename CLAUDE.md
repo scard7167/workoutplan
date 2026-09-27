@@ -41,7 +41,7 @@ widened - see the comments in config.yaml. The week is still 156 sets.
 | `analyze.py` | all analytics: loader, volume, prescribe, progression, index, bridge, stalls, balance, adherence |
 | `seed_example.py` | regenerates `log.example.csv` by running `prescribe()` forward 12 weeks - the example log is real output of the real rule, not hand-typed |
 | `log.example.csv` | 12 weeks of generated history, for DEMOING the analytics. Never what gets deployed - see below |
-| `web/` | phone-first prototype UI (Today / Trends / Plan). See **The web app** below |
+| `web/` | the deployed phone app - Session / Cardio / Progress / Plan / History, live on Vercel. See **The web app** below |
 
 ## Schema
 
@@ -234,179 +234,109 @@ recomputes a deep metric in JavaScript.
 - `python3 analyze.py json [--out web/analytics.json]` - the same numbers as one JSON
   blob, consumed by `web/app.js`
 
+## The handoff override - 2026-09-27
+
+A design handoff (`Workout_app_design_review.zip`, Nocturne) replaced the web app
+wholesale, and the user chose its formulas over `analyze.py`'s where the two disagree.
+That choice is recorded here so the repo does not quietly contradict itself. **In
+`web/` only** - `analyze.py` and the CLI are untouched and still define the numbers in
+this file:
+
+| | `analyze.py` (the CLI, this file) | `web/` since the handoff |
+|---|---|---|
+| e1RM | `w * (1 + (reps + rir)/30)`, bodyweight sets EXCLUDED | Epley `(w + 78 if bodyweight) * (1 + reps/30)` |
+| hard set | any working set; RIR <= 3 when present | RIR <= 2 |
+| volume | per-muscle bands DERIVED from `routine.yaml` | flat Missed 0-3 / Minimum 4-9 / Optimal 10-20 / High >20 |
+| crediting | 1 to EACH muscle listed | prime mover (`muscles[0]`) only |
+
+Two consequences the user accepted explicitly, having been shown both:
+
+- **The web app will tell you to add leg volume.** Hamstrings sit at 4 sets/week by
+  design because of the cycling, and the flat thresholds read that as "Minimum -> add
+  2-4 sets a week". The hard rule below still binds ME and the CLI: never recommend
+  more leg volume from this log. The app's generic advice is not that recommendation.
+- **The two will disagree.** `python3 analyze.py volume` and the app's coverage panel
+  measure different things now. That is the override, not a bug - but if a THIRD number
+  appears that neither of these tables explains, that is a bug, and say so.
+
+The single-implementation rule still holds in spirit: the web derivations live in one
+place (`web/app.js`, the section under "the log & derivations") and nowhere else. They
+are not duplicated into the renderers.
+
 ## The web app
 
-`web/` is a static page - no server, no database. It renders `web/data.js` and
-`web/analytics.json`, both generated. It never recomputes a deep metric in JavaScript;
-the only arithmetic it does itself is the live session (today's volume, and the
-progression rule for a lift Python has not seen yet), against the same rule.
+`web/` is the deployed phone app: five tabs - **Session · Cardio · Progress · Plan ·
+History** - plus a log-set sheet, a plan switcher, a finish summary, a lift detail and a
+library sheet. Static HTML/CSS/ES-module JS, no framework, no build step. It is live at
+**https://workoutplan-seven.vercel.app**, deployed from `web/` on every push to the
+branch.
 
-Two copies exist and they are not equally capable:
-
-- the **published Artifact**, opened inside claude.ai, where `window.claude` grants the
-  page the `sample` capability - it can ask Claude, with images, on the viewer's account
-- **any other copy** (Vercel, `file://`), where there is no model behind the page at all
-
-Every model-backed feature must degrade to the second case, silently and by default.
+| file | role |
+|---|---|
+| `web/index.html` | the shell: header, tab bar, five empty panels, one overlay slot |
+| `web/styles.css` | Nocturne tokens and component classes. **Never hard-code a hex** - use the variables |
+| `web/app.js` | the whole app: store, derivations, five renderers, overlays, one delegated event handler |
+| `web/data.js` | GENERATED - the library, the plans, the bands and the log.csv rows |
+| `web/api/log.js` | the store of record on Vercel, backed by Vercel Blob |
+| `web/manifest.webmanifest`, `icon*.png/svg` | installs to the phone home screen |
 
 ### Where a logged session lives
 
-`localStorage` is the **write-ahead buffer**, never the store of record: one browser on
-one device, and a cleared cache takes the history with it. The store is the artifact's
-own database (`db` capability), so a Submit is written locally first and flushed after -
-logging never waits on a signal, which matters because a gym with no bars is the normal
-case. Failed writes queue under `strengthlog.queue.v1` and retry on the next load and on
-`online`. Outside claude.ai there is no store: the page keeps working on `localStorage`
-alone and says so.
+Three layers, and conflating them loses data:
 
-One document per SESSION at `sessions/<date>`, never one per set - the database caps at
-5,000 documents, so a document per set would exhaust it in weeks. The page pulls a
-BOUNDED WINDOW (`SYNC_WINDOW` days), not the whole history: queries scan the collection,
-and the browser only ever needs enough to compute the "last week" reference and the 7/14
-day bands. Long-range analysis is `analyze.py`'s job, from `log.csv`.
+- **`localStorage` (`strengthlog.v4`) is the write-ahead buffer.** A set is on disk
+  before anything touches the network, because a gym with no signal is the normal case.
+  One browser, one device; a cleared cache takes it.
+- **`/api/log` is the store of record.** One JSON document, GET and PUT. It is what
+  makes the log survive a cleared cache and reach a second device. It needs
+  `BLOB_READ_WRITE_TOKEN` in the Vercel project; until that exists the route answers
+  `{ ok: false, reason: "not_configured" }` and the page **says so on every screen**.
+  A store that silently is not there is the one failure mode this app cannot have.
+- **`log.csv` is still the append-only system of record** for `analyze.py`. Nothing in
+  the app writes to it. Sessions live in the store until something moves them across;
+  that bridge is not built yet, and until it is, the CLI and the app see different
+  histories. Say so rather than papering over it.
 
-`log.csv` remains the append-only system of record and the only input to the deep
-analytics. The store is where sessions wait until they reach it. A session in the store
-but not yet in `log.csv` is still removable in the app; once it is in `log.csv` it is
-history and immutable.
+### Rules the UI has to keep
 
-### Paging through days on Today
+- **One render entry point: `renderAll()`.** Every mutation goes through `setState()`,
+  which persists and re-renders everything. Two tabs reading one state at different
+  moments is how Plan and Today came to disagree in the previous app.
+- **Finishing a session must be idempotent.** `finish()` moves the sets out of the live
+  session and into `sessions` in the same breath and renders the summary from its own
+  snapshot. Pressing Finish twice must never log the session twice.
+- **The baseline is read BEFORE the session joins the log**, or every lift measures
+  itself against the sets just logged and every delta reads "held".
+- **Loads come from the progression rule, never from the design.** The log sheet opens
+  on `prescribe()`'s answer - deload, progress or hold - not on a round number and not
+  on last week's weight. This is the one place the handoff was overruled.
+- **A provisional lift cannot be logged.** No `increment` means no prescription: the
+  weight boxes are disabled and the sheet says `needs setup`. **`increment` is never
+  guessed**, and `Export routine.yaml` emits a commented stub rather than a value.
+- **Touch targets are 44px, and the destructive control is armed.** The row's `x` takes
+  two taps and sits clear of the `+` beside it. Both were got wrong before.
+- **A design change may not move or hide a control** - see Hard rules.
+- **`node --check` is not enough for `web/app.js`.** Use
+  `node --input-type=module --check < web/app.js`, then load the page in a browser and
+  assert each `#p-<Tab>` has children: a thrown error inside a render leaves a blank tab
+  with nothing in the terminal to show it.
+- **`[hidden]` needs its explicit rule in `styles.css`**, and a file input is never
+  inside a hidden container.
 
-Today steps a day at a time in either direction (`‹` / `›`, plus a `today` button once
-off zero). Two dates are now distinct and must stay so:
+### Not designed yet
 
-- **the day being VIEWED** - `state.dayOffset`, signed, and `state.date` derived from it.
-  The weekday comes from `state.date` via `weekdayOf()`, never from today plus an offset:
-  JS `%` is a remainder, not a modulo, so the old form broke outright going backwards.
-- **the day the open session belongs to** - `state.sessionDate`. Paging must never
-  re-date sets that are already typed, so the sets carry their own date and survive a
-  reload as that date, whatever is on screen.
+The handoff flags these and they were NOT invented: auth/onboarding, a settings screen
+(body weight is hard-coded at 78 kg, units, band editing), a rest timer, and the
+`routine.yaml` import path. Empty states and the local-only banner WERE written, because
+`log.csv` is empty and the app is unusable without them - they are the one place the
+handoff was extended rather than followed. Ask before adding any of the rest.
 
-A day with logged sets is **history**: it renders what was logged, read-only, and says
-`logged`. Editing a past session is a correction, and corrections are stated out loud one
-row at a time - never made by overtyping a box. A day with nothing logged is still open,
-which is what lets a forgotten session be entered late; logging is refused only when an
-unsubmitted session for a DIFFERENT day is open, so sets cannot land on the wrong date.
-The viewed day's rows are its weekday's plan plus anything logged that day the plan no
-longer contains, so a lift dropped from the routine does not take its logged sets out of
-view with it.
+### The published Artifact
 
-### Editing the plan on the phone
-
-Two kinds of edit, and conflating them loses work:
-
-**Persisting and exporting are different things.** Order and set counts both PERSIST
-without any repo round-trip; only some edits additionally need to be EXPORTED.
-
-- **Set counts are changed from EITHER tab.** Today's rows carry a stepper at the end of
-  the slot row, and it calls the same `setOverride()` the Plan tab's does - one
-  mechanism, so a change made mid-session shows up in Plan, syncs, and survives a
-  publish. It is never a session-local count: an earlier version of that control kept
-  one, and that is exactly how Today and Plan came to disagree about a lift's set count.
-  The stepper will not go below what is already logged that day, and is absent on a day
-  that is history or for a lift the weekday's plan does not contain.
-  The Plan tab lists all seven days, so it marks the one Today is showing with
-  **ON TODAY** and echoes every set change with the day it landed on - a correct edit to
-  another day otherwise looks like it did nothing, which is exactly how this was
-  reported as broken when it was working.
-- **Order and set counts are owned by the phone.** Both are stored BY EXERCISE NAME per
-  day (`strengthlog.order.v1` / `.sets.v1`, synced to `prefs/order` / `prefs/sets`) and
-  applied over whatever `routine.yaml` currently says, by `effectivePlan()` - the single
-  place a day's plan is assembled, read by Today, the Plan tab and the export alike.
-  Being keyed by name and not by position, they survive a publish: a lift the file drops
-  falls out, a lift the file adds lands at the end at its file set count. A set count
-  equal to the file's is not an override and is discarded, so it cannot silently shadow
-  a later change.
-- **Reordering has TWO paths through one control, and the drag is the unreliable one.**
-  The row handle is both a drag handle and a tap target: dragging it moves the row, and
-  tapping it picks the row up so that a tap on another row's handle in the same day drops
-  it there. Tap-to-move exists because a drag asks the browser for a stream of move
-  events for a touch it is equally free to call a scroll - when it declines, the drop
-  reverts with no error anywhere, which is how this was reported as "it jumps back".
-  So: no pointer capture, move/up listeners on `window` and not the row, a `touchmove`
-  fallback for browsers that deliver touch but not pointer events, scrolling suspended
-  on `<html>` for the duration, `pointercancel` treated as a DROP rather than an abort,
-  and a plain `click` as the last resort. Every reorder echoes the day, the new position
-  and whether Today is showing that day - "it did nothing" and "it changed a day you are
-  not looking at" look identical otherwise, and that ambiguity is what got this reported
-  twice.
-- **One render entry point: `renderAll()`.** Today, Trends and the Plan tab read the same
-  state - `effectivePlan()`, the set overrides, the order - so a tab rendered at a
-  different moment from the others is showing a stale snapshot of a plan that has only one
-  value, and the two tabs then disagree. No renderer calls another; every mutation calls
-  `renderAll()`; `selectTab()` re-renders whatever you switch to; and `pullRemote()` - the
-  one place remote state lands, and the one that can replace the order and the set counts
-  wholesale because another device wrote them later - renders when it changes anything,
-  which it used not to do at all. That last hole is how Plan and Today came to show
-  different exercise orders: a failed boot pull left Plan drawn from the cached order, a
-  later flush quietly swapped in the store's, and paging Today by a day refreshed only
-  Today. `renderRemote()` skips the re-render while a Plan field has focus, so a
-  half-typed exercise name is never swept away by a sync.
-- **A set count still has to be EXPORTED**, because it changes a muscle's weekly volume
-  and `config.yaml`'s bands are DERIVED from that: until it reaches `routine.yaml` the
-  bands are measuring a plan that is not the one on screen. The Plan tab counts the
-  drift so it is visible rather than assumed.
-- **Adding, removing or swapping a lift** is still a snapshot edit tied to the
-  `routine.yaml` it was made against, and IS dropped when a newer one ships - the Plan
-  tab says so out loud rather than letting it vanish unannounced.
-
-### Switching weekly plans on the phone
-
-The Plan tab carries one chip per plan; the selected one drives Today, the Plan tab and
-the bands. The choice is a synced pref (`prefs/order.plan`), so it follows you across
-devices like the order does.
-
-- **Prefs merge PER PLAN AND PER DAY, never per document.** `prefs/order` and
-  `prefs/sets` carry an `at` map of `"<plan>/<day>" -> ISO stamp` beside the data, and
-  `mergePrefsMap()` takes a remote day only when its stamp beats this device's. A whole-
-  document `updated_at` meant last writer wins the entire week, so a second view of the
-  page that had never seen your reorder republished its stale copy over it - which is
-  what both "the order does not flow through" and "the set buttons do nothing" were.
-  Rules that fall out of it and must hold:
-  - only an edit the user actually made stamps a day. `savePrefs(days)` stamps and
-    pushes; `persistPrefs()` writes this browser only. Anything DERIVED - `pruneOverrides`,
-    absorbing another tab's write - uses `persistPrefs`, because pushing there would let
-    a freshly opened tab out-stamp a real edit.
-  - `flushQueue` READS, merges, then writes. A blind publish of one page's memory is the
-    bug itself.
-  - the stamp map is the authority, not the day map: a key with a stamp and no entry is a
-    deliberate clearing; a key with no stamp is a day that document knows nothing about
-    and must be left alone, not deleted.
-  - `renderRemote()` defers only while a drag or a held row is in flight, or while a Plan
-    field is being TYPED into - and comes back on blur. Skipping a render and never
-    returning to it is its own version of the two tabs disagreeing.
-- **Order and set counts are per PLAN as well as per day** - `strengthlog.order.v1` and
-  `.sets.v1` are now `{planId: {day: ...}}`. They are overrides on a specific week of
-  lifts, so letting one plan's counts apply to another would quietly rewrite a block you
-  are not running. `planKeyed()` migrates the old flat `{day: ...}` shape by nesting it
-  under the plan that was active when it was written; it is detected by a weekday at the
-  top level, never guessed at.
-- **A new plan starts EMPTY, not as a copy.** A duplicate of the block you are already
-  running is a second copy of the same week that then drifts apart silently; a blank one
-  makes you say what the block is for.
-- **A plan the phone invented is local until exported**, exactly like a provisional
-  exercise - the chip says `not exported` and the export emits every plan plus a
-  `schedule` entry for the selected one. The export also reminds you to derive the new
-  plan's bands, because nothing else will.
-
-### Provisional exercises
-
-The Plan tab's exercise field takes free text, and the photo dump proposes machines from
-photos. Both can produce a lift that is not in `exercises.yaml`. Such a lift is
-**provisional**: it lives in `localStorage` under `strengthlog.provisional.v1`, in that
-browser and nowhere else.
-
-A provisional lift can be planned. It cannot be prescribed for and cannot be logged
-until it has `muscles`, `rep_range` and `increment`, because those decide every load it
-will ever be given - `prescribe()` returns `needs setup`, the weight boxes are disabled,
-and `Export routine.yaml` refuses outright rather than emit a routine `analyze.py` would
-reject. **`increment` is never guessed**, by the page or by the model reading the photo:
-it is filled in only where it was actually legible, and is otherwise left blank for a
-human. A wrong increment is silent and permanent; a refused export costs a minute.
-
-Export carries a provisional lift out as a commented `exercises.yaml` stub above the
-routine. Pasting both blocks is what makes it real - the same bar as any other library
-edit, and still a decision a human makes in the repo.
+`artifact.html` and `build_artifact.py` build the claude.ai copy of the PREVIOUS
+three-tab app. They are stale as of this handoff and the artifact still runs the old
+code. Rebuild them or retire them deliberately - do not assume the live artifact matches
+`web/`.
 
 ## Volume accounting
 
@@ -432,10 +362,16 @@ now quads are trained directly.
   export. Read it off the machine or leave it blank.
 - If a metric is not built, **say so**. Never compute it ad hoc from the CSV - and if a
   new metric is added, it goes in `analyze.py` first, never only in `web/app.js`.
+  Since the handoff override the web app recomputes its OWN metrics from the set log by
+  its own formulas; that is a declared, documented divergence, not a licence to invent a
+  third number in a renderer.
 - Never recommend more leg volume on the basis of this log alone. The cycling and
   running are not in it, so this log cannot see what the legs already carry. That the
   user has since chosen to add a leg day does not license recommending more.
-  `calves` is uncovered by design; its report line is UNCOVERED, never RED.
+  `calves` is uncovered by design; its report line is UNCOVERED, never RED. The web
+  app's Focus-next cards WILL say "add 2-4 sets a week" for hamstrings, because the
+  user chose the handoff's flat thresholds knowing that - see The handoff override.
+  That is the app talking, not this rule being relaxed.
 - **No analytic may be indexed off the ACTIVE plan.** Trends, the index, the bridge,
   stalls and balance read `log.csv` alone and must keep doing so; anything that iterates
   lifts iterates `all_lifts()` (every plan) plus what the log holds. A lift dropping out
@@ -458,11 +394,14 @@ now quads are trained directly.
 - **`node --check` is not enough for `web/app.js`.** It parses the file as CommonJS and
   will pass a module-level syntax error that stops the whole page loading. Use
   `node --input-type=module --check < web/app.js`, and load the page in a browser and
-  assert `#planweek` has children - a thrown error inside a render leaves the tab blank
-  with nothing in the terminal to show it.
+  assert every `#p-<Tab>` panel has children - a thrown error inside a render leaves the
+  tab blank with nothing in the terminal to show it.
 - **Touch targets in the row controls are 44px tall, and never smaller.** They were 28px,
   which reads in a test as working and on a phone as broken. A destructive control (the
   row's `x`) is kept clear of a frequently used one and confirms before acting.
+- **The store must never fail silently.** If `/api/log` is not configured or cannot be
+  reached, the page says `local only` in the header and carries a banner on every
+  screen. A log that quietly does not save is worse than one that refuses to.
 - `web/data.js` and `web/analytics.json` are generated files. Never hand-edit them -
   run `python3 web/build_data.py` after changing `exercises.yaml`, `config.yaml`,
   `routine.yaml` or `log.csv`.

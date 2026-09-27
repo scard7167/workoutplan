@@ -2,205 +2,50 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0F1113">
-<meta name="description" content="Strength log and training instrument: the plan, the prescribed load, and what twelve weeks of it did.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="theme-color" content="#161826">
+<meta name="description" content="Strength Log - log the sets, see whether you are actually getting stronger, edit next week's plan with the volume consequences in place.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Strength Log">
 <title>Strength Log</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230F1113'/><path d='M7 13h3v6H7zM22 13h3v6h-3zM11 15h10v2H11z' fill='%237FD1E8'/></svg>">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="app">
+<div id="app">
+
   <header>
     <div class="hrow">
       <span class="mark" aria-hidden="true"></span>
       <span class="brand">Strength Log</span>
-      <span class="hstate" id="hstate"></span>
+      <span class="hmeta" id="hmeta"></span>
     </div>
     <nav role="tablist" aria-label="sections">
-      <button role="tab" id="tab-today"  aria-controls="p-today"  aria-selected="true">Today</button>
-      <button role="tab" id="tab-trends" aria-controls="p-trends" aria-selected="false">Trends</button>
-      <button role="tab" id="tab-plan"   aria-controls="p-plan"   aria-selected="false">Plan</button>
+      <button role="tab" data-tab="Session"  aria-selected="true">Session</button>
+      <button role="tab" data-tab="Cardio"   aria-selected="false">Cardio</button>
+      <button role="tab" data-tab="Progress" aria-selected="false">Progress</button>
+      <button role="tab" data-tab="Plan"     aria-selected="false">Plan</button>
+      <button role="tab" data-tab="History"  aria-selected="false">History</button>
     </nav>
+    <div class="rule"></div>
   </header>
 
-  <main>
-    <!-- ------------------------------------------------------------ TODAY -->
-    <section class="panel" id="p-today" role="tabpanel" aria-labelledby="tab-today">
-      <div class="sessionhead">
-        <div>
-          <div class="eyebrow" id="today-day"></div>
-          <h1 id="today-name"></h1>
-        </div>
-        <div class="progress" id="today-progress"></div>
-      </div>
-
-      <ol class="plan" id="today-plan"></ol>
-
-      <div class="feedback" id="feedback" aria-live="polite"></div>
-
-      <div class="actions">
-        <button id="btn-submit" class="primary">Submit &amp; next day</button>
-        <button id="btn-end">Export rows</button>
-        <button id="btn-clear">Discard</button>
-      </div>
-      <pre class="csv" id="csvout" hidden></pre>
-      <div class="scannote" id="syncnote" hidden></div>
-
-      <p class="fineprint">
-        <b>Submit</b> stores the session and moves to the next day. Inside claude.ai it
-        goes to your account's own store, so it survives a cleared cache and reaches every
-        device; anywhere else it stays in this browser. Either way it is written locally
-        first and synced after, so logging never waits on a signal. It counts toward the
-        volume bands and becomes the "last week" reference for next time - but the
-        strength index, per-lift trends, bridge, stalls and adherence come from
-        <code>analyze.py</code>, so those only move once the sessions reach
-        <code>log.csv</code> and it runs again. Nothing here writes to
-        <code>log.csv</code> directly. Loads come from the double-progression rule in
-        <code>config.yaml</code>, never from anywhere else. Weight only - reps are always
-        the target shown, RIR always blank, so a deload can't trigger from what's logged
-        here.
-      </p>
-    </section>
-
-    <!-- ----------------------------------------------------------- TRENDS -->
-    <section class="panel" id="p-trends" role="tabpanel" aria-labelledby="tab-trends" hidden>
-      <div class="note" id="localnote" hidden></div>
-      <div class="kpis" id="kpis"></div>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Per-lift trend</h2>
-          <span class="meta" id="trend-meta"></span>
-        </div>
-        <div class="liftgrid" id="liftgrid"></div>
-        <div class="detail" id="liftdetail"></div>
-      </section>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Hard sets vs band</h2>
-          <div class="seg" id="volseg">
-            <button data-w="7" aria-pressed="true">7d</button>
-            <button data-w="14" aria-pressed="false">14d</button>
-          </div>
-        </div>
-        <div id="meters"></div>
-        <p class="legend" id="vol-legend"></p>
-      </section>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Volume-load bridge</h2>
-          <span class="meta">week over week, kg lifted</span>
-        </div>
-        <div id="bridge"></div>
-      </section>
-
-      <div class="pair">
-        <section class="card">
-          <div class="cardhead"><h2>Stalls</h2></div>
-          <div id="stalls"></div>
-        </section>
-        <section class="card">
-          <div class="cardhead"><h2>Balance</h2></div>
-          <div id="balance"></div>
-        </section>
-      </div>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Strength index</h2>
-          <span class="meta" id="index-meta"></span>
-        </div>
-        <div id="indexrows"></div>
-        <p class="legend" id="index-note"></p>
-      </section>
-
-      <section class="card">
-        <div class="cardhead">
-          <h2>Session log</h2>
-          <span class="meta" id="log-meta"></span>
-        </div>
-        <div id="sessionlog"></div>
-        <div class="actions" style="margin-top:12px">
-          <button id="btn-more">Show more</button>
-        </div>
-        <p class="legend">
-          Top set per lift, against <b>that lift's own previous session</b> - not a calendar
-          week, so a lift trained twice a week is measured against 3 days ago. Bodyweight
-          sessions are measured in reps. Sessions marked <b>submitted</b> live on this device
-          only and can be removed; everything else is <code>log.csv</code> history and is
-          immutable here.
-        </p>
-      </section>
-    </section>
-
-    <!-- ------------------------------------------------------------- PLAN -->
-    <section class="panel" id="p-plan" role="tabpanel" aria-labelledby="tab-plan" hidden>
-      <div class="sessionhead">
-        <div>
-          <div class="eyebrow" id="plan-sub">Weekly routine</div>
-          <h1 id="plan-title"></h1>
-        </div>
-        <div class="progress" id="plan-summary"></div>
-      </div>
-      <section class="card" id="scancard">
-        <div class="cardhead">
-          <h2>Photo dump</h2>
-          <span class="meta" id="scan-meta"></span>
-        </div>
-        <div class="drop" id="drop">
-          <input type="file" id="photos" accept="image/*" multiple class="filein">
-          <label for="photos" id="btn-pick" class="pickbtn" tabindex="0">Add machine photos</label>
-          <button id="btn-identify" class="primary" hidden>Identify</button>
-          <p class="dropnote">
-            Nameplate, QR-code page, or the machine itself - one lift per photo. What
-            comes back is a proposal: nothing joins the plan until you press Add, and the
-            increment stays empty unless it was actually legible.
-          </p>
-        </div>
-        <div id="scanqueue"></div>
-        <div class="scannote" id="scan-note"></div>
-        <div id="scanout"></div>
-      </section>
-
-      <div id="planpicker" class="planpicker"></div>
-      <label class="planrenamewrap">plan name
-        <input id="planrename" type="text" autocomplete="off" autocapitalize="words"
-               spellcheck="false" aria-label="rename this plan">
-      </label>
-      <div class="scannote" id="plannote" hidden></div>
-      <div class="scannote" id="plan-echo" aria-live="polite"></div>
-      <div id="planweek"></div>
-      <datalist id="exlist"></datalist>
-      <div class="actions">
-        <button id="btn-yaml" class="primary">Export routine.yaml</button>
-        <button id="btn-reset">Reset to file</button>
-      </div>
-      <pre class="csv" id="yamlout" hidden></pre>
-      <p class="fineprint">
-        Edits live in this browser. Export and paste into <code>routine.yaml</code> to make
-        them the plan of record - the CLI, the prescriptions and the volume bands all read
-        that file. <b>Exercise order is the exception</b>: it changes no volume, so it is
-        stored as yours and survives a new publish without any of this. The exercise field takes <b>free text</b>: a name the library knows
-        resolves to it, anything else becomes a lift of this browser's own. Such a lift is
-        planned but inert - no prescription, no logging - until its increment and rep range
-        are set, because those two numbers decide every load it will ever be given. Export
-        carries it out as an <code>exercises.yaml</code> stub, and refuses while any of it
-        is still blank.
-      </p>
-      <p class="fineprint" id="build"></p>
-    </section>
+  <main id="main">
+    <section class="panel" id="p-Session"  role="tabpanel"></section>
+    <section class="panel" id="p-Cardio"   role="tabpanel" hidden></section>
+    <section class="panel" id="p-Progress" role="tabpanel" hidden></section>
+    <section class="panel" id="p-Plan"     role="tabpanel" hidden></section>
+    <section class="panel" id="p-History"  role="tabpanel" hidden></section>
   </main>
 
-  <div class="lightbox" id="lightbox" hidden>
-    <button class="lightbox-close" id="lightbox-close" aria-label="Close photo">&times;</button>
-    <img id="lightbox-img" src="" alt="">
-  </div>
+  <!-- overlays: bottom sheets and full-screen covers, rendered on demand -->
+  <div id="overlay"></div>
 
 </div>
 <script type="module" src="app.js"></script>

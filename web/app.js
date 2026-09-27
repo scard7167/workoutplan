@@ -1,2573 +1,1373 @@
-// The rules live in CLAUDE.md, exercises.yaml, routine.yaml and config.yaml. data.js is
-// generated from all of them plus analyze.py, so nothing here restates a threshold.
+// Strength Log - Session · Cardio · Progress · Plan · History.
 //
-// Division of labour: every DEEP number (trend slopes, strength index, the volume-load
-// bridge, stalls, balance, adherence) is computed once by analyze.py and shipped in
-// ANALYTICS. This file renders those. Only the live session - counting today's volume
-// and prescribing the next load for a lift the plan has just added - is computed here,
-// against the same rule.
+// Built from the Nocturne design handoff. Every metric here is recomputed from the set
+// log using the handoff's Data formulas (Epley, 78 kg for bodyweight lifts, hard set =
+// RIR <= 2, volume 0-3/4-9/10-20/>20). Those deliberately differ from analyze.py's -
+// see CLAUDE.md, "The handoff override".
 //
-// Today logs WEIGHT ONLY, against set slots the Plan tab already fixed the count of -
-// there is no exercise name or set-count to type or parse. Every logged row still
-// carries reps and rir (the schema and the progression rule need both), but since
-// neither is asked for, they are always the prescribed target reps and a blank RIR -
-// this session can no longer tell "hit the target" from "missed it," so a deload can
-// never be triggered from a Today-logged set. That trade is deliberate, made once here,
-// not something to silently work around elsewhere.
-import { EXERCISES, BANDS, UNCOVERED, METRICS, PROGRESSION, ROUTINE,
-         PLANS, SCHEDULE, ACTIVE_PLAN, BANDS_BY_PLAN, ANALYTICS, SEED_LOG,
-         BUILD } from "./data.js";
+// The one thing that does NOT come from the handoff is the load the log sheet opens on:
+// that is the repo's double-progression rule, because no load may come from anywhere
+// else. The design is unaffected - it is still a stepper with a number in it.
 
-const MUSCLES = ["chest","lats","upper_back","front_delts","side_delts","rear_delts",
-                 "biceps","triceps","quads","hamstrings","glutes","calves","core"];
-const DAYS = ["mon","tue","wed","thu","fri","sat","sun"];
-const STORE_SESSION = "strengthlog.session.v3";
-const STORE_ROUTINE = "strengthlog.routine.v2";
-const STORE_LOG = "strengthlog.committed.v1";
+import { EXERCISES, PLANS, ACTIVE_PLAN, SEED_LOG, BUILD } from "./data.js";
+
+/* ------------------------------------------------------------------ constants */
+
+const BW_KG = 78;                    // handoff: bodyweight lifts carry 78 kg. A setting one day.
+const CARDIO_GOAL = 3;               // sessions a week, Mon-Sun
+const NOISE = 2.5;                   // % - anything inside this is "flat", never up or down
+const MIN_N = 4;                     // sessions in the window before a lift is rated
+
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+const DAY_LABEL = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+const JS_DAY = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+const GROUPS = ["chest", "upper back", "lats", "lower back", "shoulders",
+  "biceps", "triceps", "quads", "hamstrings", "glutes", "calves", "abs"];
+const TO_GROUP = {
+  chest: "chest", lats: "lats", upper_back: "upper back", lower_back: "lower back",
+  front_delts: "shoulders", side_delts: "shoulders", rear_delts: "shoulders",
+  biceps: "biceps", triceps: "triceps", quads: "quads", hamstrings: "hamstrings",
+  glutes: "glutes", calves: "calves", core: "abs", abs: "abs",
+};
+const COV = {
+  missed: { label: "Missed", rank: 0 }, minimum: { label: "Minimum", rank: 1 },
+  high: { label: "High", rank: 2 }, optimal: { label: "Optimal", rank: 3 },
+};
+const covStatus = (n) => (n <= 3 ? "missed" : n <= 9 ? "minimum" : n <= 20 ? "optimal" : "high");
+
+const CARDIO_TYPES = ["Treadmill", "Bike", "Elliptical", "Outdoor run"];
+const MUSCLE_PILLS = ["chest", "lats", "upper_back", "lower_back", "side_delts", "front_delts",
+  "rear_delts", "biceps", "triceps", "hamstrings", "quads", "glutes", "calves", "core"];
+
+/* ---------------------------------------------------------------- small utils */
+
 const $ = (id) => document.getElementById(id);
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const sum = (a) => a.reduce((p, q) => p + q, 0);
+const avg = (a) => (a.length ? sum(a) / a.length : null);
+const uniq = (a) => [...new Set(a)];
+
+const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const today = () => iso(new Date());
+const addDays = (s, n) => { const d = new Date(s + "T00:00:00"); d.setDate(d.getDate() + n); return iso(d); };
+const dayDiff = (a, b) => Math.round((new Date(a + "T00:00:00") - new Date(b + "T00:00:00")) / 864e5);
+const weekdayOf = (s) => JS_DAY[new Date(s + "T00:00:00").getDay()];
+const fmtDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
+const disp = (ex) => ex.replace(/_/g, " ");
+const primeOf = (ex) => (EXERCISES[ex] ? EXERCISES[ex].muscles[0] : (state.custom[ex] || {}).muscle || null);
+const groupOf = (ex) => TO_GROUP[primeOf(ex)] || null;
+const isBW = (ex) => !!(EXERCISES[ex] && EXERCISES[ex].bodyweight);
+const libOf = (ex) => EXERCISES[ex] || state.custom[ex] || null;
+const initials = (ex) => disp(ex).split(" ").map((w) => w[0]).slice(0, 2).join("");
+
+const sgn = (v) => (v > 0 ? "+" : v < 0 ? "−" : "±");
+const pct = (v, d = 1) => (v == null ? "—" : `${sgn(+v.toFixed(d))}${Math.abs(v).toFixed(d)}%`);
+const cls = (v, noise) => (v == null ? "none" : Math.abs(v) < noise ? "flat" : v < 0 ? "down" : "up");
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+/* ------------------------------------------------------------------- the store */
+//
+// localStorage is the write-ahead buffer: a set is on disk before anything touches the
+// network, because a gym with no bars is the normal case. /api/log is the store of
+// record - it is what makes the log survive a cleared cache and reach a second device.
+// When the API says it has no blob configured the page runs on localStorage alone and
+// says so, rather than pretending to have saved.
+
+const LS = "strengthlog.v4";
+const API = "api/log";
+
+const store = {
+  state: "local",              // local | syncing | synced | error
+  detail: "",
+  async pull() {
+    try {
+      const r = await fetch(API, { headers: { accept: "application/json" } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      if (!j.ok) { store.state = "local"; store.detail = j.reason || "no store"; return null; }
+      store.state = "synced";
+      return j.data || null;
+    } catch (e) { store.state = "local"; store.detail = String(e.message || e); return null; }
+  },
+  async push(doc) {
+    if (store.state === "local" && store.detail === "not_configured") return;
+    try {
+      const r = await fetch(API, {
+        method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify(doc),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = await r.json();
+      store.state = j.ok ? "synced" : "local";
+      if (!j.ok) store.detail = j.reason || "no store";
+    } catch (e) { store.state = "error"; store.detail = String(e.message || e); }
+    renderHeader();
+  },
+};
+
+let pushTimer = null;
+function persist(push = true) {
+  const doc = {
+    v: 4, updated_at: new Date().toISOString(),
+    sessions: state.sessions, cardio: state.cardio, live: state.live,
+    plans: state.plans, base: state.base, custom: state.custom,
+    planKey: state.planKey, sessionPlanKey: state.sessionPlanKey,
+  };
+  try { localStorage.setItem(LS, JSON.stringify(doc)); } catch { /* private mode */ }
+  if (!push) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => store.push(doc), 1200);
+}
+
+function readLocal() {
+  try { return JSON.parse(localStorage.getItem(LS) || "null"); } catch { return null; }
+}
+
+/* ------------------------------------------------------------------- the state */
+
+const filePlans = () => {
+  const out = {};
+  for (const [pid, p] of Object.entries(PLANS)) {
+    const week = {};
+    for (const d of DAYS) week[d] = ((p.week[d] || {}).plan || []).map((x) => [x.exercise, x.sets]);
+    out[pid] = { name: p.name, week };
+  }
+  return out;
+};
 
 const state = {
-  // dayOffset is the day being VIEWED, signed: negative is the past. sessionDate is the
-  // day `sets` belongs to. They were one thing when Today could only look forward from
-  // an open session; now that you can page back through history they cannot be, or
-  // stepping to yesterday would re-date the sets you have open for today.
-  dayOffset: 0,
-  date: "",          // derived from dayOffset - always set via setDay()
-  sets: [],
-  sessionDate: null, // the date `sets` belongs to; null when there are none
-  committed: [],     // sessions submitted on this device, not yet in an analyze.py run
-  sticky: null,
-  window: 7,
-  logLimit: 8,
-  lift: ANALYTICS.stalls[0]?.exercise || ROUTINE.lifts?.[0] || null,
-  routine: null,     // null = use the file
-  provisional: {},   // lifts that exist in this browser only - see below
-  photos: [],        // machine photos waiting to be identified (this session only)
-  proposals: null,   // what Claude read off them, pending your confirmation
-  remote: [],        // sessions pulled from the store - see `sync` below
-  order: {},         // per-day exercise ORDER, owned by the phone - see below
-  setsBy: {},        // per-day, per-lift SET COUNT overrides - same ownership as order
-  orderAt: null,     // when this device last changed either of them
-  orderDirty: false, // changed but not yet in the store
-  pick: null,            // the row tap-to-move has picked up, if any
-  plan: ACTIVE_PLAN,     // which weekly plan is selected - see filePlan()
-  planName: {},          // renames and new plans this device made, id -> name
-  routineBy: {},         // structural edits, per plan
-  // Stamped PER DAY, not per document. A whole-map timestamp means the last writer wins
-  // the whole week, so a second view of this page that had never seen your reorder was
-  // overwriting it with its own stale copy - which is what "the order does not flow
-  // through" and "the set buttons do nothing" both were. Keyed "<plan>/<day>", because
-  // with plans the same weekday exists once per plan and they are edited independently.
-  orderAtBy: {},         // plan/day -> when this device last changed that day's order
-  setsAtBy: {},          // plan/day -> when this device last changed that day's set counts
-  dropped: 0,        // set-count edits discarded because a newer plan shipped
-  queue: [],         // dates written here but not yet in the store
-  sync: "off",       // off | idle | pending | error
-  syncCode: null,
+  tab: "Session",
+  win: "8 wk",
+  day: weekdayOf(today()),
+  plans: filePlans(),
+  base: clone(filePlans()),
+  custom: {},                      // name -> {muscle, increment|null, rep_range}
+  planKey: ACTIVE_PLAN,
+  sessionPlanKey: ACTIVE_PLAN,
+  sessions: {},                    // date -> {date, plan, lifts:{ex:[{w,r,rir}]}}
+  cardio: [],
+  live: null,                      // {date, plan, logged:{}, extra:{}, order:null}
+  // ui only
+  reorder: false, sheet: null, w: 0, r: 8, summaryOn: false, lift: null,
+  libOn: false, query: "", newMuscle: "chest", switchOn: false,
+  renaming: null, draft: "", renameError: "",
+  openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null,
+  lastSummary: null, armedDrop: null,
+  cType: "Treadmill", cMin: "30", cKm: "0", cWhen: "visit", cDate: null, cLast: null,
 };
 
-// --------------------------------------------- provisional exercises
-// Two doors lead here: a name typed into the Plan tab that the library does not know,
-// and a machine identified from a photo. Both produce a lift that exists in this
-// browser and nowhere else.
-//
-// It is deliberately NOT a library entry. exercises.yaml is edited in the repo, by a
-// human, because `increment` and `rep_range` decide every future load this lift will
-// ever be prescribed - a guessed increment corrupts them silently and forever. So a
-// provisional lift carries those fields as null until someone fills them in, and until
-// they are filled in it can be PLANNED but not prescribed for and not logged. Export
-// carries it out as an exercises.yaml stub; that paste is what makes it real.
-const STORE_PROV = "strengthlog.provisional.v1";
+const plansOf = () => state.plans[state.planKey] || { name: state.planKey, week: {} };
+const weekOf = (pid) => (state.plans[pid] || { week: {} }).week;
+const liveDate = () => (state.live ? state.live.date : today());
 
-// The library as this browser currently sees it: the shipped file, plus whatever is
-// provisional. Everything downstream (the rule, the feedback, volume) reads this, so a
-// provisional lift needs no special case anywhere except where readiness is checked.
-const LIB = Object.create(null);
-function rebuildLib() {
-  for (const k of Object.keys(LIB)) delete LIB[k];
-  Object.assign(LIB, EXERCISES, state.provisional);
-}
-rebuildLib();
-
-const isProvisional = (e) => !EXERCISES[e] && !!state.provisional[e];
-const provReady = (p) => !!p && typeof p.increment === "number" && p.increment > 0
-  && Array.isArray(p.rep_range) && p.rep_range[0] > 0 && p.rep_range[1] >= p.rep_range[0]
-  && Array.isArray(p.muscles) && p.muscles.length > 0;
-// Ready = the progression rule can actually run on it. A shipped entry always is;
-// analyze.py refuses to load exercises.yaml otherwise.
-const exReady = (e) => EXERCISES[e] ? true : provReady(state.provisional[e]);
-
-const slug = (s) => String(s).toLowerCase().trim()
-  .replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-
-function loadProvisional() {
-  try {
-    const raw = localStorage.getItem(STORE_PROV);
-    if (raw) state.provisional = JSON.parse(raw) || {};
-  } catch { state.provisional = {}; }
-  rebuildLib();
-}
-function saveProvisional() {
-  rebuildLib();
-  try { localStorage.setItem(STORE_PROV, JSON.stringify(state.provisional)); }
-  catch (e) { showFeedback(`<span class="err">! could not save: ${e.name}. ` +
-    `Photos are the bulk of it - remove a few.</span>`); }
+function ensureLive() {
+  const d = today();
+  if (state.live && state.live.date !== d && !Object.keys(state.live.logged).length) state.live = null;
+  if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null };
+  return state.live;
 }
 
-// Typed text -> a canonical name, the same way CLAUDE.md resolves a name mid-session:
-// canonical, then the display form, then aliases. No fuzzy matching - a near-miss that
-// silently picks the wrong lift is worse than being told there is no match.
-function resolveExercise(text) {
-  const q = String(text).toLowerCase().trim().replace(/\s+/g, " ");
-  if (!q) return null;
-  const k = slug(q);
-  if (LIB[k]) return k;
-  for (const [name, ex] of Object.entries(LIB)) {
-    if (label(name) === q) return name;
-    if ((ex.aliases || []).some(a => String(a).toLowerCase() === q)) return name;
-  }
-  return null;
-}
+/* ------------------------------------------------------- the log & derivations */
 
-function createProvisional(display, fields = {}) {
-  const key = slug(display);
-  if (!key || EXERCISES[key]) return key || null;
-  state.provisional[key] = {
-    aliases: fields.aliases || [],
-    muscles: (fields.muscles || []).filter(m => MUSCLES.includes(m)),
-    increment: typeof fields.increment === "number" && fields.increment > 0 ? fields.increment : null,
-    rep_range: Array.isArray(fields.rep_range) ? fields.rep_range : null,
-    bodyweight: !!fields.bodyweight,
-    image: fields.image || null,
-    note: fields.note || "",
-    source: fields.source || "typed",
-  };
-  saveProvisional();
-  return key;
-}
-
-// Local date parts, not toISOString(): that converts to UTC first, so anyone east of
-// Greenwich logging before ~02:00 would have their session filed under yesterday.
-function isoDate(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-` +
-         `${String(d.getDate()).padStart(2, "0")}`;
-}
-// Parsed as local date parts, so the weekday cannot shift by a timezone.
-const weekdayOf = (iso) => {
-  const [y, m, d] = iso.split("-").map(Number);
-  return DAYS[(new Date(y, m - 1, d).getDay() + 6) % 7];
-};
-
-function setDay(offset) {
-  state.dayOffset = offset;
-  const d = new Date();
-  d.setDate(d.getDate() + offset);
-  state.date = isoDate(d);
-}
-setDay(0);
-
-// ------------------------------------------------------------------ plans
-// A weekly plan is a whole week of lifts. Several can exist - a machine block, a free
-// weights block, a travel week - and exactly one is SELECTED at a time: it is what Today
-// prescribes from, what the Plan tab edits, and what the volume bands are measured
-// against. Nothing else changes with it. e1RM trends, the strength index, the bridge,
-// stalls and balance all read log.csv, which has no plan column and never will: a set is
-// a set whoever scheduled it, so switching blocks never breaks a history.
-//
-// A plan this device invented is local until it is exported, exactly like a provisional
-// exercise - the file is still where the plan of record lives.
-const planIds = () => [...new Set([...Object.keys(PLANS), ...Object.keys(state.planName)])];
-const planName = (id) => state.planName[id] || PLANS[id]?.name || id;
-const blankWeek = () => Object.fromEntries(
-  DAYS.map(d => [d, { name: PLANS[ACTIVE_PLAN]?.week[d]?.name || d, plan: [] }]));
-// The FILE's version of the selected plan. A plan this device created has none, so it
-// starts from an empty week rather than borrowing another plan's lifts.
-const filePlan = () =>
-  PLANS[state.plan] || { name: planName(state.plan), week: blankWeek(), lifts: [] };
-const routine = () => state.routineBy[state.plan] || filePlan();
-// Cheap stable hash (djb2) of the shipped routine, used to tell whether a stored local
-// edit was made against the routine.yaml that is currently deployed.
-function routineFingerprint(r) {
-  const str = JSON.stringify(r);
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
-  return String(h);
-}
-const todayKey = () => weekdayOf(state.date);
-const label = (e) => e.replace(/_/g, " ");
-
-// --------------------------------------------------- the progression rule
-const roundDown = (kg, inc) => Math.floor((kg + 1e-9) / inc) * inc;
-
-// Everything the browser knows happened: what analyze.py had at build time, what the
-// store holds, and what this device logged and may not have flushed yet.
-const history = () => [...SEED_LOG, ...remoteRows(), ...state.committed];
-
-function priorSession(exercise) {
-  const all = history().filter(r => r.exercise === exercise && r.date < state.date);
-  const dates = [...new Set(all.map(r => r.date))].sort();
-  if (!dates.length) return null;
-  const d = dates[dates.length - 1];
-  return all.filter(r => r.date === d).sort((a, b) => a.set_no - b.set_no);
-}
-
-function deload(load, ex, floor) {
-  if (load === 0)
-    return { weight_kg: 0, target_reps: Math.max(1, floor - 2),
-             reason: "deload floor: bodyweight" };
-  return { weight_kg: roundDown(load * (1 - PROGRESSION.deload_pct), ex.increment),
-           target_reps: floor, reason: "deload" };
-}
-
-// Fallback only. ANALYTICS.prescriptions is the authority for routine lifts; this covers
-// a lift the plan gained in the browser and Python has not seen.
-function prescribeJS(exercise) {
-  const ex = LIB[exercise];
-  // No increment and no rep range means there IS no progression rule for this lift yet.
-  // Returning a plausible-looking number here is the one thing the rule must never do.
-  if (!ex || !exReady(exercise))
-    return { weight_kg: null, target_reps: null, reason: "needs setup", basis_date: null };
-  const [floor, ceiling] = ex.rep_range;
-  const prior = priorSession(exercise);
-  if (!prior) return { weight_kg: null, target_reps: floor, reason: "no baseline", basis_date: null };
-  const basis_date = prior[0].date;
-  const load = prior[prior.length - 1].weight_kg;
-  if (prior.some(s => s.reps < floor && s.rir === 0))
-    return { ...deload(load, ex, floor), basis_date };
-  if (prior.every(s => s.reps >= ceiling && s.rir !== null && s.rir <= PROGRESSION.rir_ceiling))
-    return { weight_kg: load + ex.increment, target_reps: floor, reason: "progress", basis_date };
-  return { weight_kg: load, target_reps: Math.min(ceiling, Math.max(...prior.map(s => s.reps)) + 1),
-           reason: "hold", basis_date };
-}
-// analyze.py is the authority, but it only knows what was in log.csv when it last ran.
-// Once a session submitted on this device is both usable as a baseline (before today)
-// and newer than the one Python computed from, its own basis is stale - fall back to
-// prescribeJS, which applies the same rule to the newer input. Without this the row
-// would show "last week 100" next to a prescription of 45 from a superseded session.
-//
-// Note such a session can never produce "progress": Today logs a blank RIR, and the
-// rule does not treat unverified as proven. It holds at the last logged load, which is
-// the correct answer given what was actually recorded.
-const prescribe = (e) => {
-  const py = ANALYTICS.prescriptions[e];
-  if (!py) return prescribeJS(e);
-  const superseded = state.committed.some(r =>
-    r.exercise === e && r.date < state.date && (!py.basis_date || r.date > py.basis_date));
-  return superseded ? prescribeJS(e) : py;
-};
-
-// The weight just logged, paired with the target reps for another set of it today.
-// No deload branch here: that needs an actual rep/RIR miss, and Today only logs
-// weight - every row's reps is already the prescribed target, never a real shortfall.
-function nextSet(just) {
-  return { weight_kg: just.weight_kg, target_reps: prescribe(just.exercise).target_reps,
-           reason: "hold" };
-}
-
-// ------------------------------------------------------ feedback contract
-function fmtW(w, exercise) {
-  if (w === null || w === undefined) return "-";
-  if (w === 0) return "bw";
-  const plus = exercise && LIB[exercise]?.bodyweight ? "+" : "";
-  return `${plus}${+Number(w).toFixed(2)}`;
-}
-const fmtSet = (s) =>
-  `${fmtW(s.weight_kg, s.exercise)}${s.weight_kg === 0 ? " " : ""}x${s.reps}` +
-  `${s.rir === null || s.rir === undefined ? "" : ` @${s.rir}`}`;
-
-function baselineLine(s) {
-  const prior = priorSession(s.exercise);
-  const m = prior && prior.find(p => p.set_no === s.set_no);
-  if (!m) return `<span class="l2">last  no baseline</span>`;
-  const dw = +(s.weight_kg - m.weight_kg).toFixed(2), dr = s.reps - m.reps;
-  const bits = [];
-  if (dw !== 0) bits.push(`${dw > 0 ? "+" : ""}${dw} kg`);
-  if (dr !== 0) bits.push(`${dr > 0 ? "+" : ""}${dr} rep${Math.abs(dr) === 1 ? "" : "s"}`);
-  if (!bits.length) bits.push("same");
-  const cls = dw < 0 || (dw === 0 && dr < 0) ? "down" : (dw > 0 || dr > 0) ? "up" : "";
-  return `<span class="l2">last ${m.date} s${m.set_no} ${fmtSet(m)}  ` +
-         `<span class="${cls}">${bits.join(" ")}</span></span>`;
-}
-
-function feedback(s) {
-  const n = nextSet(s);
-  const tail = n.reason && n.reason !== "hold" ? `  (${n.reason})` : "";
-  return [`<span class="l1">${label(s.exercise)} s${s.set_no} ${fmtSet(s)}</span>`,
-          baselineLine(s),
-          `<span class="l3">next ${fmtW(n.weight_kg, s.exercise)} x${n.target_reps}${tail}</span>`
-         ].join("\n");
-}
-
-// ------------------------------------------------------------- svg helpers
-const SVGNS = "http://www.w3.org/2000/svg";
-function svg(vb, cls = "") {
-  return `<svg viewBox="${vb}" class="${cls}" role="img" preserveAspectRatio="none">`;
-}
-function sparkline(values, w = 120, h = 26) {
-  if (values.length < 2) return "";
-  const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1;
-  const pts = values.map((v, i) =>
-    `${(i / (values.length - 1) * (w - 2) + 1).toFixed(1)},${(h - 2 - (v - lo) / span * (h - 4)).toFixed(1)}`);
-  const last = pts[pts.length - 1].split(",");
-  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">` +
-    `<polyline points="${pts.join(" ")}" fill="none" stroke="var(--accent)" stroke-width="1.5"` +
-    ` vector-effect="non-scaling-stroke" stroke-linejoin="round"/>` +
-    `<circle cx="${last[0]}" cy="${last[1]}" r="2" fill="var(--accent)"/></svg>`;
-}
-
-// ------------------------------------------------------------- TODAY view
-// Weight-only logging. Each exercise gets exactly `p.sets` input boxes - the count the
-// Plan tab set, and nothing in Today can change it. A slot's position IS its set_no;
-// clearing one un-logs that set without renumbering its neighbours.
-//
-// Everything already logged on the day being viewed, from wherever it is held.
-const loggedOn = (date) => history().filter(r => r.date === date);
-
-// A day that already has logged sets is HISTORY: it is shown, not typed into. Editing a
-// past session is a correction, and corrections are stated out loud one row at a time
-// (CLAUDE.md), never made by quietly overtyping a box. A day with nothing logged is
-// still open - which is what makes it possible to enter a session you forgot - unless an
-// unsubmitted session for a different day is open, in which case that one has to be
-// resolved first rather than silently mixed into this date.
-const dayIsHistory = () => loggedOn(state.date).length > 0;
-const dayEditable = () =>
-  !dayIsHistory() && (state.sessionDate === null || state.sessionDate === state.date);
-
-// The rows to show for one lift on the viewed day: the open session's, or history's.
-const setsShown = (exercise) => dayIsHistory()
-  ? loggedOn(state.date).filter(r => r.exercise === exercise)
-      .sort((a, b) => a.set_no - b.set_no)
-  : (state.sessionDate === state.date
-      ? state.sets.filter(s => s.exercise === exercise) : []);
-
-function loggedFor(exercise) {
-  return setsShown(exercise).length;
-}
-
-// The Math.max is a data guard, not a feature: it only fires if the day holds more
-// logged sets than the plan now allows (the plan was cut after they were logged), and
-// exists so logged data is never hidden. Nothing here can create that state.
-function slotCount(p) {
-  return Math.max(p.sets, loggedFor(p.exercise));
-}
-
-// The viewed day's rows: its weekday's plan, plus anything actually logged that day that
-// the plan no longer contains - otherwise a lift dropped from the routine since would
-// take its logged sets out of view with it.
-function viewPlan() {
-  const base = effectivePlan(todayKey());
-  const logged = loggedOn(state.date);
-  if (!logged.length) return base;
-  const have = new Set(base.map(p => p.exercise));
-  const extra = [...new Set(logged.map(r => r.exercise))]
-    .filter(e => !have.has(e)).sort()
-    .map(e => ({ exercise: e, sets: logged.filter(r => r.exercise === e).length,
-                 offplan: true }));
-  return [...base, ...extra];
-}
-
-function renderToday() {
-  const day = todayKey();
-  const entry = routine().week[day];
-  const plan = viewPlan();
-  const history_ = dayIsHistory();
-  const editable = dayEditable();
-  const [yy, mm, dd] = state.date.split("-").map(Number);
-  const dayText = new Date(yy, mm - 1, dd)
-    .toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "short" });
-
-  // Step a day at a time in either direction. Submitting still moves the plan on without
-  // the calendar moving, so an offset is stated plainly with a way back to today.
-  const off = state.dayOffset;
-  $("today-day").innerHTML =
-    `<button class="dnav" id="btn-prevday" aria-label="previous day">&lsaquo;</button>` +
-    `<span class="dlabel">${dayText}</span>` +
-    `<button class="dnav" id="btn-nextday" aria-label="next day">&rsaquo;</button>` +
-    (off === 0 ? "" :
-      ` <span class="ahead">${off > 0 ? `+${off}d ahead` : `${-off}d back`}</span> ` +
-      `<button class="backtoday" id="btn-backtoday">today</button>`) +
-    (history_ ? ` <span class="ahead">logged</span>` : "");
-  // renderAll, not renderToday: paging changes todayKey(), and the Plan tab marks that
-  // weekday with ON TODAY and words its echoes against it. Refreshing only Today is what
-  // left Plan claiming a different day was current - and, once the order came from the
-  // store rather than the file, showing a different order too.
-  const step = (n) => { setDay(state.dayOffset + n); saveSession(); renderAll(); };
-  $("btn-prevday").onclick = () => step(-1);
-  $("btn-nextday").onclick = () => step(1);
-  if (off !== 0)
-    $("btn-backtoday").onclick = () => { setDay(0); saveSession(); renderAll(); };
-  $("today-name").textContent = entry.name;
-
-  const planned = plan.reduce((a, p) => a + p.sets, 0);
-  const onDay = plan.reduce((a, p) => a + loggedFor(p.exercise), 0);
-  const done = plan.reduce((a, p) => a + Math.min(p.sets, loggedFor(p.exercise)), 0);
-  const extra = onDay - done;
-  $("today-progress").innerHTML =
-    `<b>${onDay}<span style="color:var(--muted)">/${planned}</span></b>sets logged` +
-    (extra > 0 ? `<br><span style="color:var(--warn)">${extra} off plan</span>` : "");
-
-  $("today-plan").innerHTML = plan.map(p => {
-    const rx = prescribe(p.exercise);
-    const n = loggedFor(p.exercise);
-    const cls = ["", n >= p.sets ? "done" : "", state.sticky === p.exercise ? "active" : ""].join(" ");
-    const img = LIB[p.exercise]?.image;
-    const thumb = img
-      ? `<button class="thumb" data-img="${img}" aria-label="Show ${label(p.exercise)} photo">
-           <img src="${img}" alt="" loading="lazy"></button>`
-      : "";
-    const placeholder = fmtW(rx.weight_kg, p.exercise);
-
-    // Headline reads "weight x sets": the weight follows what you are ACTUALLY lifting
-    // today once anything is logged - the heaviest set entered - and falls back to the
-    // prescription before that. The number beside it is the PLANNED set count, matching
-    // the boxes below and the Plan tab; it is not the rep target, which sits in the
-    // muted line under it since reps are never entered here anyway.
-    const onThis = setsShown(p.exercise);
-    const top = onThis.length ? Math.max(...onThis.map(s => s.weight_kg)) : null;
-    const headline = top === null ? placeholder : fmtW(top, p.exercise);
-
-    // Last session's weight per set, greyed under each box - the number to beat.
-    const prior = priorSession(p.exercise);
-    const ready = exReady(p.exercise);
-    const slots = Array.from({ length: slotCount(p) }, (_, i) => {
-      const setNo = i + 1;
-      const logged = onThis.find(s => s.set_no === setNo);
-      const prev = prior && prior.find(s => s.set_no === setNo);
-      return `<div class="slot ${logged ? "filled" : ""}">
-        <span class="slotn">${setNo}</span>
-        <input type="text" inputmode="decimal" class="slotw" data-ex="${p.exercise}" data-set="${setNo}"
-               placeholder="${editable ? placeholder : "&ndash;"}" value="${logged ? +logged.weight_kg : ""}"
-               ${ready && editable ? "" : "disabled"}
-               aria-label="${label(p.exercise)} set ${setNo} weight">
-        <span class="slotprev">${prev ? fmtW(prev.weight_kg, p.exercise) : "&ndash;"}</span>
-      </div>`;
-    }).join("");
-    // Changing the count here changes the PLAN, through the very same setOverride() the
-    // Plan tab's stepper calls - so it shows up there, syncs, and survives a publish.
-    // An earlier version of this control kept a session-local count instead, which is
-    // exactly how Today and Plan came to disagree about how many sets a lift had.
-    // Built as a .slot so it shares the boxes' three-row column and lines up with the
-    // inputs however the row wraps, rather than being positioned against them by hand.
-    const step = (editable && !p.offplan)
-      ? `<div class="slot setstep">
-           <span class="slotn">&nbsp;</span>
-           <span class="stepbtns">
-             <button class="addslot" data-role="less" aria-label="one fewer set of ${label(p.exercise)}">&minus;</button>
-             <button class="addslot" data-role="more" aria-label="one more set of ${label(p.exercise)}">+</button>
-           </span>
-         </div>`
-      : "";
-    // "last week" is the honest label for a lift trained once a week, which is most of
-    // them on a 7-day rotation - but a lift scheduled twice a week was last done 3 or 4
-    // days ago, and calling that "last week" would be wrong. Say the actual gap instead.
-    const daysBack = prior
-      ? Math.round((Date.parse(state.date) - Date.parse(prior[0].date)) / 864e5)
-      : null;
-    const prevLabel = daysBack === null ? "last"
-      : daysBack >= 6 && daysBack <= 8 ? "last week" : `${daysBack}d ago`;
-    const legend = `<div class="slot slotlab" aria-hidden="true"
-        title="${prior ? "last session " + prior[0].date : "no previous session"}">
-      <span class="slotn">set</span><span class="labgap"></span>
-      <span class="slotprev">${prevLabel}</span></div>`;
-    return `<li class="${cls}" data-ex="${p.exercise}">
-      <div class="rowtop">
-        <span class="nmwrap" data-role="preview">${thumb}<span class="nm">${label(p.exercise)}</span></span>
-        <span class="rx ${top === null ? "" : "live"}">${headline} &times; ${p.sets}</span>
-      </div>
-      <span class="why ${history_ ? "" : rx.reason === "needs setup" ? "needsetup" : rx.reason}">${
-        history_
-          ? (onThis.length
-              ? `logged ${onThis.length} set${onThis.length === 1 ? "" : "s"} ` +
-                `&middot; ${onThis[0].reps} reps`
-              : "not logged this day")
-          : rx.reason === "needs setup"
-            ? "no increment or rep range yet &middot; set it in Plan"
-            : `${rx.reason}${rx.basis_date ? " since " + rx.basis_date : ""}` +
-              ` &middot; ${rx.target_reps} reps`}</span>
-      <div class="slots">${legend}${slots}${step}</div></li>`;
-  }).join("");
-
-  // Submit and Discard act on the OPEN session. On a day that is already history there
-  // is none, and leaving them live would answer "Submit" on a day showing ten logged
-  // sets with "nothing logged".
-  $("btn-submit").disabled = history_;
-  $("btn-clear").disabled = history_;
-
-  for (const li of $("today-plan").querySelectorAll("li")) {
-    const ex = li.dataset.ex;
-    li.querySelector('[data-role="preview"]').onclick = (e) => {
-      if (e.target.closest(".thumb")) return;
-      state.sticky = ex; showPrescription(ex);
-      for (const other of $("today-plan").querySelectorAll("li")) other.classList.remove("active");
-      li.classList.add("active");
-    };
-    const t = li.querySelector(".thumb");
-    if (t) {
-      t.onclick = (e) => { e.stopPropagation(); openLightbox(t.dataset.img); };
-      t.onkeydown = (e) => {
-        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); openLightbox(t.dataset.img); }
-      };
-    }
-    const bump = (n) => {
-      const cur = effectivePlan(day).find(x => x.exercise === ex)?.sets ?? 1;
-      // Never below what is already logged on this day: the plan may shrink, but not so
-      // far that it would hide a set that happened.
-      const floor = Math.max(1, loggedFor(ex));
-      const next = clamp(cur + n, floor, 8);
-      if (next === cur) return;
-      setOverride(day, ex, next);
-      renderAll();          // Today and Plan share one set count - refresh both
-    };
-    li.querySelector('[data-role="less"]')?.addEventListener("click", () => bump(-1));
-    li.querySelector('[data-role="more"]')?.addEventListener("click", () => bump(1));
-
-    for (const input of li.querySelectorAll(".slotw")) {
-      // No focus-preview here: the row's "rx" text already shows the prescribed
-      // weight/reps at a glance, and firing showPrescription() on focus would
-      // overwrite the commit feedback the moment focus moves to the next slot.
-      input.onblur = () => commitSlot(ex, +input.dataset.set, input.value);
-      input.onkeydown = (e) => {
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        // blur() commits synchronously, which re-renders the whole row and detaches
-        // every node in it - a reference grabbed before blur() is already stale by the
-        // time it returns, so the next input has to be looked up fresh afterwards.
-        const nextSet = +input.dataset.set + 1;
-        input.blur();
-        document.querySelector(`.slotw[data-ex="${ex}"][data-set="${nextSet}"]`)?.focus();
-      };
+// Every set the app knows about: log.csv history plus every finished session.
+function allSets() {
+  const out = SEED_LOG.map((r) => mkSet(r.date, r.exercise, r.weight_kg, r.reps, r.rir));
+  for (const s of Object.values(state.sessions)) {
+    for (const [ex, sets] of Object.entries(s.lifts)) {
+      for (const v of sets) out.push(mkSet(s.date, ex, v.w, v.r, v.rir == null ? null : v.rir));
     }
   }
-  renderSyncState();
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
 
-// A slot's position IS its set_no - clearing it removes that logged row without
-// shifting any other slot. Reps and RIR are never asked for: reps is always the
-// current prescribed target, RIR is always blank. See the file header for why.
-function commitSlot(exercise, setNo, raw) {
-  const trimmed = raw.trim();
-  const existing = state.sets.findIndex(s => s.exercise === exercise && s.set_no === setNo);
+function mkSet(date, ex, w, reps, rir) {
+  const load = isBW(ex) ? BW_KG + w : w;
+  return { date, ex, name: disp(ex), w, reps, rir, load, e1: load * (1 + reps / 30) };
+}
 
-  if (trimmed === "") {
-    if (existing === -1) return;
-    const [dropped] = state.sets.splice(existing, 1);
-    if (!state.sets.length) state.sessionDate = null;
-    saveSession(); renderToday();
-    return showFeedback(`<span class="l1">cleared ${label(exercise)} s${setNo}</span>\n` +
-      `<span class="hint">was ${fmtSet(dropped)}</span>`);
+// Best set per session, per lift.
+function bySession(sets) {
+  const m = {};
+  for (const s of sets) {
+    const x = (m[s.ex] = m[s.ex] || { ex: s.ex, days: {}, all: [] });
+    x.all.push(s);
+    const d = (x.days[s.date] = x.days[s.date] || { date: s.date, best: 0, sets: 0, top: null, ton: 0, hard: 0, hload: 0 });
+    d.sets++; d.ton += s.load * s.reps;
+    if (s.rir == null || s.rir <= 2) { d.hard++; d.hload += s.load; }
+    if (s.e1 > d.best) { d.best = s.e1; d.top = s; }
   }
-
-  if (dayIsHistory()) {
-    renderToday();
-    return showFeedback(
-      `<span class="err">? ${state.date} is already logged</span>\n` +
-      `<span class="hint">a logged day is history here. Correct it by saying so, one row ` +
-      `at a time - or remove the session in Trends and log it again.</span>`);
-  }
-  if (state.sets.length && state.sessionDate !== state.date) {
-    renderToday();
-    return showFeedback(
-      `<span class="err">? an unsubmitted session for ${state.sessionDate} is open</span>\n` +
-      `<span class="hint">Submit or Discard it before logging ${state.date}, so sets ` +
-      `cannot land on the wrong date.</span>`);
-  }
-  const ex = LIB[exercise];
-  if (!ex || !exReady(exercise)) {
-    renderToday();
-    return showFeedback(
-      `<span class="err">? ${label(exercise)} has no increment or rep range yet</span>\n` +
-      `<span class="hint">set them in Plan. Every row needs a rep target, and the rule ` +
-      `will not invent one.</span>`);
-  }
-  const weight = parseFloat(trimmed.replace(",", "."));
-  if (!Number.isFinite(weight) || weight < 0) {
-    renderToday();
-    return showFeedback(`<span class="err">? "${raw}" is not a valid weight</span>`);
-  }
-  if (weight === 0 && !ex.bodyweight) {
-    renderToday();
-    return showFeedback(`<span class="err">? weight 0 but ${label(exercise)} is not bodyweight</span>`);
-  }
-
-  const row = { exercise, set_no: setNo, weight_kg: weight,
-                reps: prescribe(exercise).target_reps, rir: null };
-  if (existing === -1) state.sets.push(row); else state.sets[existing] = row;
-  state.sessionDate = state.date;
-  state.sticky = exercise;
-  showFeedback(feedback(row));
-  renderToday();
-  saveSession();
+  for (const x of Object.values(m)) x.series = Object.values(x.days).sort((a, b) => (a.date < b.date ? -1 : 1));
+  return m;
 }
 
-function openLightbox(src) {
-  $("lightbox-img").src = src;
-  $("lightbox").hidden = false;
-}
-function closeLightbox() { $("lightbox").hidden = true; $("lightbox-img").src = ""; }
-$("lightbox").onclick = closeLightbox;
-$("lightbox-close").onclick = (e) => { e.stopPropagation(); closeLightbox(); };
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLightbox(); });
-
-function showPrescription(exercise) {
-  const p = prescribe(exercise);
-  const prior = priorSession(exercise);
-  const last = prior
-    ? `last ${prior[0].date} · ${prior.length} sets · top ${fmtSet(prior[0])}`
-    : "last  no baseline";
-  $("feedback").innerHTML =
-    `<span class="l1">${label(exercise)}</span>\n<span class="l2">${last}</span>\n` +
-    `<span class="l3">next ${fmtW(p.weight_kg, exercise)} x${p.target_reps}` +
-    `${p.reason === "hold" ? "" : `  (${p.reason})`}</span>`;
+// Least-squares slope of e1RM over a series, as %/week of the current value.
+function ratePctWeek(series) {
+  const n = series.length;
+  if (n < 2) return 0;
+  const t0 = series[0].date;
+  const xs = series.map((d) => dayDiff(d.date, t0) / 7), ys = series.map((d) => d.best);
+  const mx = avg(xs), my = avg(ys);
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) { num += (xs[i] - mx) * (ys[i] - my); den += (xs[i] - mx) ** 2; }
+  const slope = den ? num / den : 0;
+  const cur = ys[n - 1] || 1;
+  return (slope / cur) * 100;
 }
 
-// ------------------------------------------------------------ TRENDS view
-function volumeCounts(days) {
-  const live = state.sets.map(s => ({ ...s, date: state.sessionDate || state.date }));
-  const all = [...history(), ...live];
-  // Nothing logged anywhere yet is a normal day-one state, not an error: anchor the
-  // window on today so the bands render at zero rather than throwing on an undefined end.
-  const end = all.map(r => r.date).sort().pop() || state.date;
-  const startMs = Date.parse(end) - (days - 1) * 864e5;
-  const start = isoDate(new Date(startMs));
-  const win = all.filter(r => r.date >= start && r.date <= end);
-  const counts = Object.fromEntries(MUSCLES.map(m => [m, 0]));
-  for (const s of win)
-    if (s.rir === null || s.rir === undefined || s.rir <= METRICS.hard_set_rir)
-      for (const m of (LIB[s.exercise]?.muscles || [])) counts[m]++;
-  return { counts, end, sessions: new Set(win.map(r => r.date)).size, sets: win.length };
+function statusOf(series) {
+  if (series.length < 2) return null;
+  const tail = series.slice(-4).map((d) => d.best);
+  if (tail.length >= 3 && Math.max(...tail) - Math.min(...tail) < 0.6) return "plateauing";
+  const r = ratePctWeek(series);
+  return r > 0.6 ? "progressing" : r > 0.15 ? "maintaining" : r > -0.3 ? "plateauing" : "regressing";
 }
 
-function flagOf(n, band, muscle) {
-  if (UNCOVERED.includes(muscle)) return "UNCOVERED";
-  if (n < band.min || n > band.max) return "RED";
-  if (n < band.target) return "AMBER";
-  return "GREEN";
-}
+const mean2 = (a, end) => { const x = end ? a.slice(-2) : a.slice(0, 2); return x.length ? sum(x) / x.length : 0; };
 
-function renderKpis() {
-  const ix = ANALYTICS.index, ad = ANALYTICS.adherence, br = ANALYTICS.bridge;
-  const vals = Object.values(ix.muscles).map(m => m.index).filter(v => v !== null);
-  const prior = Object.values(ix.exercises).map(e => e.prior_index).filter(v => v !== null);
-  const overall = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-  const overallPrior = prior.length ? prior.reduce((a, b) => a + b, 0) / prior.length : null;
-  const delta = overall !== null && overallPrior !== null ? overall - overallPrior : null;
-  const dcls = delta === null ? "" : delta >= 0 ? "up" : "down";
-
-  $("kpis").innerHTML = `
-    <div class="kpi"><div class="k">Strength index</div>
-      <div class="v">${overall === null ? "-" : overall.toFixed(0)}</div>
-      <div class="d ${dcls}">${delta === null ? "no prior period"
-        : `${delta >= 0 ? "+" : ""}${delta.toFixed(1)} vs prior 28d`}</div></div>
-    <div class="kpi"><div class="k">Adherence</div>
-      <div class="v">${ad.empty || ad.rate === null ? "-" : Math.round(ad.rate * 100) + "%"}</div>
-      <div class="d">${ad.empty ? "nothing logged yet"
-        : `${ad.logged_sets}/${ad.planned_sets} sets · ${ad.trained_days}/${ad.planned_days}d`}</div></div>
-    <div class="kpi"><div class="k">Load 7d</div>
-      <div class="v">${br.empty ? "-" : (br.vl_current / 1000).toFixed(1) + "t"}</div>
-      <div class="d ${br.empty ? "" : br.delta >= 0 ? "up" : "down"}">${br.empty ? "nothing logged yet"
-        : `${br.delta >= 0 ? "+" : ""}${(br.delta / 1000).toFixed(1)}t vs prior`}</div></div>`;
-}
-
-function trendChip(p) {
-  if (!p || p.slope === null || p.per_week === undefined)
-    return `<span class="ld">${p?.reason ? "no slope" : "-"}</span>`;
-  const u = p.unit || "kg";
-  const cls = p.noisy ? "" : p.per_week > 0 ? "up" : p.per_week < 0 ? "down" : "";
-  return `<span class="ld ${cls}">${p.per_week >= 0 ? "+" : ""}${p.per_week} ${u}/wk` +
-         `${p.noisy ? " · noisy" : ""}</span>`;
-}
-
-// Every lift that has a history or a home in any plan - NOT the selected plan's lifts.
-// A trend belongs to the lift; indexing this off the selected plan is what would make a
-// lift's whole history vanish from Trends the moment you switch blocks, which is the one
-// thing plans must never do. analyze.py builds ANALYTICS.progression the same way.
-function trendLifts() {
-  const out = [];
-  for (const e of Object.keys(ANALYTICS.progression || {})) if (LIB[e]) out.push(e);
-  for (const pid of planIds())
-    for (const e of scheduledLifts(pid)) if (LIB[e] && !out.includes(e)) out.push(e);
-  for (const r of history()) if (LIB[r.exercise] && !out.includes(r.exercise)) out.push(r.exercise);
-  return out;
-}
-
-function renderLiftGrid() {
-  const P = ANALYTICS.progression;
-  $("trend-meta").textContent =
-    ANALYTICS.sessions.length
-      ? `best set per session · ${ANALYTICS.index.baseline_weeks}w baseline · to ${ANALYTICS.last_logged}`
-      : "no sessions logged yet";
-  $("liftgrid").innerHTML = trendLifts().map(e => {
-    const p = P[e];
-    const vals = (p?.points || []).map(x => x.value);
-    return `<button class="lift" data-ex="${e}" aria-pressed="${state.lift === e}">
-      <span class="ln">${label(e)}</span>
-      <span class="lv">${p?.current ?? "-"}<span class="ld"> ${p?.basis === "reps" ? "reps" : "kg e1RM"}</span></span>
-      ${trendChip(p)}
-      ${sparkline(vals)}</button>`;
-  }).join("");
-  for (const b of $("liftgrid").querySelectorAll(".lift"))
-    b.onclick = () => { state.lift = b.dataset.ex; renderLiftGrid(); renderDetail(); };
-}
-
-function renderDetail() {
-  const p = ANALYTICS.progression[state.lift];
-  const box = $("liftdetail");
-  if (!p || p.points.length < 2) {
-    box.innerHTML = `<p class="empty">${label(state.lift)}: not enough sessions to plot.</p>`;
-    return;
-  }
-  const W = 600, H = 190, L = 38, R = 8, T = 12, B = 26;
-  const vals = p.points.map(v => v.value);
-  const lo = Math.min(...vals), hi = Math.max(...vals);
-  const pad = (hi - lo) * 0.15 || 1;
-  const y0 = lo - pad, y1 = hi + pad;
-  const t0 = Date.parse(p.points[0].date), t1 = Date.parse(p.points[p.points.length - 1].date);
-  const X = (d) => L + (Date.parse(d) - t0) / ((t1 - t0) || 1) * (W - L - R);
-  const Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
-
-  const line = p.points.map(pt => `${X(pt.date).toFixed(1)},${Y(pt.value).toFixed(1)}`).join(" ");
-  const grid = [y0, (y0 + y1) / 2, y1].map(v =>
-    `<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${W - R}" y2="${Y(v).toFixed(1)}"
-       stroke="var(--line)" stroke-width="1" vector-effect="non-scaling-stroke"/>
-     <text x="${L - 6}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" fill="var(--muted)"
-       font-size="10" font-family="var(--mono)">${v.toFixed(0)}</text>`).join("");
-
-  let trend = "";
-  if (p.slope_per_day !== undefined && p.slope_per_day !== null && !p.noisy) {
-    const win = p.points.filter(pt => Date.parse(pt.date) >= t1 - p.trend_sessions * 864e5 * 30);
-    const s0 = win[0], s1 = p.points[p.points.length - 1];
-    const days = (Date.parse(s1.date) - Date.parse(s0.date)) / 864e5;
-    const yStart = s1.value - p.slope_per_day * days;
-    trend = `<line x1="${X(s0.date).toFixed(1)}" y1="${Y(yStart).toFixed(1)}"
-        x2="${X(s1.date).toFixed(1)}" y2="${Y(s1.value).toFixed(1)}"
-        stroke="var(--ink-2)" stroke-width="1" stroke-dasharray="4 3"
-        vector-effect="non-scaling-stroke"/>`;
-  }
-  const dots = p.points.map(pt =>
-    `<circle cx="${X(pt.date).toFixed(1)}" cy="${Y(pt.value).toFixed(1)}" r="2.2"
-       fill="${pt.value === p.best ? "var(--good)" : "var(--accent)"}"><title>${pt.date}: ${pt.value}</title></circle>`).join("");
-
-  const slopeTxt = p.slope === null || p.per_week === undefined
-    ? (p.reason || "no slope")
-    : `${p.per_week >= 0 ? "+" : ""}${p.per_week} ${p.unit}/week · ` +
-      `${p.pct_per_month >= 0 ? "+" : ""}${p.pct_per_month}%/month · r² ${p.r2}` +
-      (p.noisy ? " · NOISY, not a trend" : "");
-
-  box.innerHTML = `<div class="dhead"><h3>${label(state.lift)}</h3>
-      <span class="meta">${p.n_sessions} sessions · best ${p.best} on ${p.best_date}</span></div>
-    <svg viewBox="0 0 ${W} ${H}" role="img"
-      aria-label="${label(state.lift)} best set per session, ${slopeTxt}">
-      ${grid}${trend}
-      <polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="1.6"
-        vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
-      ${dots}
-      <text x="${L}" y="${H - 8}" fill="var(--muted)" font-size="10" font-family="var(--mono)">${p.first}</text>
-      <text x="${W - R}" y="${H - 8}" text-anchor="end" fill="var(--muted)" font-size="10"
-        font-family="var(--mono)">${p.last}</text>
-    </svg>
-    <p class="legend">${slopeTxt}${p.regime_change
-      ? " · <b>bodyweight sets excluded</b>: added load and bodyweight reps are not the same measurement"
-      : ""}</p>`;
-}
-
-function renderMeters() {
-  const { counts, end, sessions, sets } = volumeCounts(state.window);
-  const scale = state.window / 7;
-  $("meters").innerHTML = MUSCLES.map(m => {
-    const band = { min: BANDS[m].min * scale, target: BANDS[m].target * scale, max: BANDS[m].max * scale };
-    const n = counts[m], f = flagOf(n, band, m);
-    const axis = Math.max(band.max * 1.25, n * 1.08, 1);
-    const pc = (v) => clamp(v / axis * 100, 0, 100);
-    return `<div class="meter">
-      <div class="mtop"><span class="mname">${label(m)}</span>
-        <span class="mval">${n} / ${band.min}-${band.max}</span>
-        <span class="mflag ${f}">${f}</span></div>
-      <div class="track" role="img" aria-label="${m}: ${n} sets, band ${band.min} to ${band.max}, ${f}">
-        <span class="band" style="left:${pc(band.min)}%;width:${pc(band.max) - pc(band.min)}%"></span>
-        <span class="bar ${f}" style="width:${pc(n)}%"></span>
-        <span class="tick" style="left:${pc(band.target)}%"></span></div></div>`;
-  }).join("");
-  $("vol-legend").innerHTML =
-    `Rolling ${state.window}d to ${end} · ${sessions} sessions · ${sets} working sets, today included. ` +
-    `Bar = hard sets credited to prime movers only. Block = <b>min-max</b>, tick = <b>target</b>, ` +
-    `both derived from routine.yaml.<br>` +
-    `<b>${UNCOVERED.map(label).join(" and ")}</b> are uncovered by design - the cycling and running ` +
-    `load them and this log never sees it.`;
-}
-
-function renderBridge() {
-  const b = ANALYTICS.bridge;
-  if (b.empty) {
-    $("bridge").innerHTML = `<p class="empty">Needs two weeks of logged sets to decompose.
-      Nothing in <code>log.csv</code> yet.</p>`;
-    return;
-  }
-  const rows = [["sets", b.effects.sets], ["weight", b.effects.weight], ["reps", b.effects.reps],
-                ["covar", b.effects.covar], ["mix", b.effects.mix]];
-  const span = Math.max(...rows.map(r => Math.abs(r[1])), 1);
-  const bars = rows.map(([k, v]) => {
-    const w = Math.abs(v) / span * 46;
-    const left = v >= 0 ? 50 : 50 - w;
-    const col = v >= 0 ? "var(--good)" : "var(--crit)";
-    return `<div class="wfrow"><span class="wl">${k}</span>
-      <span class="wtrack"><span class="zero" style="left:50%"></span>
-        <span style="left:${left}%;width:${w}%;background:${col}"></span></span>
-      <span class="wv">${v >= 0 ? "+" : ""}${Math.round(v).toLocaleString()}</span></div>`;
-  }).join("");
-  $("bridge").innerHTML = `<div class="wf">
-    <div class="wfrow"><span class="wl">prior wk</span><span class="wtrack"></span>
-      <span class="wv">${Math.round(b.vl_prior).toLocaleString()}</span></div>
-    ${bars}
-    <div class="wfrow total"><span class="wl">this wk</span><span class="wtrack"></span>
-      <span class="wv">${Math.round(b.vl_current).toLocaleString()}</span></div></div>
-    <p class="legend">kg lifted = &Sigma;(weight &times; reps) over hard sets.
-      <b>covar</b> is the within-week load/rep mix, which is what makes the identity exact -
-      residual ${b.residual}. Bodyweight sets carry no load and are excluded:
-      ${b.bodyweight_sets.prior} &rarr; ${b.bodyweight_sets.current} this week.</p>`;
-}
-
-function renderStalls() {
-  const f = ANALYTICS.stalls;
-  $("stalls").innerHTML = f.length ? f.map(s => `
-    <div class="flagrow"><div class="fh">
-      <span class="sev ${s.severity}">${s.severity.toUpperCase()}</span>
-      <span class="fn">${label(s.exercise)}</span>
-      <span class="fs">${s.slope_per_week >= 0 ? "+" : ""}${s.slope_per_week}/wk · flat ${s.flat_days}d</span>
-    </div><div class="fa">${s.action}</div></div>`).join("")
-    : ANALYTICS.sessions.length
-      ? `<p class="empty">Nothing stalled. A flat e1RM between load increments is what
-         double progression looks like when it is working - only a lift that has stopped
-         climbing and is not trending up gets flagged.</p>`
-      : `<p class="empty">Nothing logged yet. A stall needs weeks of a lift before it
-         means anything.</p>`;
-}
-
-function renderBalance() {
-  const b = ANALYTICS.balance;
-  if (b.empty) {
-    $("balance").innerHTML = `<p class="empty">No sets logged yet - no ratios to take.</p>`;
-    return;
-  }
-  const rows = ["push_pull", "quad_hamstring", "upper_lower"].map(k => {
-    const r = b[k];
-    return `<div class="ratio"><span class="rn">${k.replace(/_/g, " : ")}</span>
-      <span class="rv ${r.flag}">${r.value === null ? "-" : r.value}</span>
-      <span class="rb">${r.band.min}-${r.band.max}</span></div>`;
-  }).join("");
-  $("balance").innerHTML = rows + `<p class="legend">${b.note}</p>`;
-}
-
-function renderIndex() {
-  const ix = ANALYTICS.index;
-  $("index-meta").textContent = ix.period_end
-    ? `each lift vs its own first ${ix.baseline_weeks}w = 100 · ${ix.period_days}d to ${ix.period_end}`
-    : `each lift vs its own first ${ix.baseline_weeks}w = 100`;
-  const entries = Object.entries(ix.exercises).filter(([, v]) => v.index !== null)
-    .sort((a, b) => b[1].index - a[1].index);
-  const hi = Math.max(120, ...entries.map(([, v]) => v.index));
-  $("indexrows").innerHTML = entries.map(([e, v]) => {
-    const w = clamp(v.index / hi * 100, 0, 100);
-    const base = clamp(100 / hi * 100, 0, 100);
-    const col = v.index >= 100 ? "var(--good)" : "var(--warn)";
-    return `<div class="idxrow"><span class="in">${label(e)}</span>
-      <span class="it"><span style="width:${w}%;background:${col};opacity:.55"></span>
-        <span class="base" style="left:${base}%"></span></span>
-      <span class="iv">${v.index}</span></div>`;
-  }).join("");
-  if (!entries.length)
-    $("indexrows").innerHTML = `<p class="empty">Nothing indexed yet - a lift needs
-      ${ix.baseline_weeks} weeks of its own history before 100 means anything.</p>`;
-  $("index-note").innerHTML = ix.unindexed.length
-    ? `Not indexed: ${ix.unindexed.map(u => `<b>${label(u.exercise)}</b> - ${u.reason}`).join("; ")}.`
-    : entries.length ? "Every lift has a baseline." : "";
-}
-
-// Everything below the fold on Trends comes from analyze.py at build time. Sessions
-// submitted on this device are NOT in it, and saying so beats quietly showing numbers
-// that are a week stale.
-function renderLocalNote() {
-  const el = $("localnote");
-  const days = [...new Set([...remoteRows(), ...state.committed].map(r => r.date))];
-  if (!days.length) { el.hidden = true; return; }
-  el.hidden = false;
-  const pending = state.queue.length;
-  el.innerHTML =
-    `<b>${days.length} session${days.length === 1 ? "" : "s"} logged since the last ` +
-    `analyze.py run</b> (${days.sort().join(", ")})` +
-    (pending ? `, ${pending} not yet synced` : "") +
-    `. Counted in the volume bands below and in each lift's "last week" reference - but ` +
-    `not in the strength index, per-lift trends, bridge, stalls or adherence. Those are ` +
-    `computed by <code>analyze.py</code> from <code>log.csv</code>.`;
-}
-
-// --------------------------------------------------------- session log
-// Every session on record - the seeded history plus anything submitted on this device -
-// newest first, each lift shown against its OWN previous session. That comparison is
-// per-exercise, not per-week: a lift trained twice a week is measured against 3 days
-// ago, not against a calendar week that never happened.
-function buildSessionLog() {
-  const rows = history();
-  const perEx = new Map();     // exercise -> date -> sets
-  const perDate = new Map();   // date -> exercise -> sets
-  for (const r of rows) {
-    if (!perEx.has(r.exercise)) perEx.set(r.exercise, new Map());
-    const em = perEx.get(r.exercise);
-    if (!em.has(r.date)) em.set(r.date, []);
-    em.get(r.date).push(r);
-
-    if (!perDate.has(r.date)) perDate.set(r.date, new Map());
-    const dm = perDate.get(r.date);
-    if (!dm.has(r.exercise)) dm.set(r.exercise, []);
-    dm.get(r.exercise).push(r);
-  }
-  // Removable = not yet in log.csv. The immutability rule protects the logged history
-  // analyze.py was built from, not a session that is merely stored - and after a cache
-  // clear a synced session lives only in `remote`, so keying this on `committed` would
-  // silently make it permanent on one device and editable on another.
-  const seeded = new Set(SEED_LOG.map(r => r.date));
-
-  return [...perDate.keys()].sort().reverse().map(date => {
-    const exercises = [...perDate.get(date)].map(([ex, sets]) => {
-      sets = [...sets].sort((a, b) => a.set_no - b.set_no);
-      // A session carrying no load is measured in reps, not kilos - a 0 kg "top weight"
-      // is not a number, and differencing two of them fakes a flat trend. If the previous
-      // session carried load and this one does not (or the reverse), the two are not the
-      // same measurement and there is no delta to state.
-      const bw = sets.every(s => s.weight_kg === 0);
-      const topOf = (arr, asReps) => asReps
-        ? Math.max(...arr.map(s => s.reps)) : Math.max(...arr.map(s => s.weight_kg));
-      const top = topOf(sets, bw);
-      const priorDates = [...perEx.get(ex).keys()].filter(d => d < date).sort();
-      const prevDate = priorDates[priorDates.length - 1] || null;
-      const prevSets = prevDate ? perEx.get(ex).get(prevDate) : null;
-      const prevBw = prevSets ? prevSets.every(s => s.weight_kg === 0) : null;
-      const prevTop = prevSets ? topOf(prevSets, prevBw) : null;
-      const gap = prevDate
-        ? Math.round((Date.parse(date) - Date.parse(prevDate)) / 864e5) : null;
-      const comparable = prevSets !== null && prevBw === bw;
-      return { ex, sets, bw, top, prevDate, prevSets, prevBw, prevTop, gap, comparable,
-               delta: comparable ? +(top - prevTop).toFixed(2) : null };
-    }).sort((a, b) => a.ex.localeCompare(b.ex));
-    const setCount = exercises.reduce((a, e) => a + e.sets.length, 0);
-    return { date, exercises, setCount, submitted: !seeded.has(date) };
+// Everything Progress needs, for one window.
+function windowView(weeks) {
+  const sets = allSets();
+  if (!sets.length) return { empty: true, lifts: [], sessions: 0, idx: [100], end: today() };
+  const end = sets[sets.length - 1].date;
+  const from = addDays(end, -(weeks * 7 - 1));
+  const win = sets.filter((s) => s.date >= from);
+  const per = bySession(win);
+  const lifts = Object.values(per).map((x) => {
+    const s = x.series, b = s.map((d) => d.best);
+    const chg = mean2(b, false) ? (mean2(b, true) / mean2(b, false) - 1) * 100 : 0;
+    return {
+      ex: x.ex, name: x.name || disp(x.ex), muscle: primeOf(x.ex), group: groupOf(x.ex),
+      series: s, n: s.length, chg, cur: b[b.length - 1] || 0, first: b[0] || 0,
+      rate: ratePctWeek(s), status: statusOf(s),
+      bucket: s.length < MIN_N ? "thin" : chg >= NOISE ? "up" : chg <= -NOISE ? "down" : "flat",
+    };
   });
+  // Strength index: each lift normalised to its own first session in the window = 100,
+  // averaged across lifts, one point per week.
+  const nWeeks = Math.max(1, weeks);
+  const idx = [];
+  for (let k = 0; k < nWeeks; k++) {
+    const cut = addDays(from, (k + 1) * 7 - 1);
+    const vals = lifts.map((l) => {
+      const upto = l.series.filter((d) => d.date <= cut);
+      return upto.length && l.first ? (upto[upto.length - 1].best / l.first) * 100 : null;
+    }).filter((v) => v != null);
+    if (vals.length) idx.push(+avg(vals).toFixed(1));
+  }
+  if (!idx.length) idx.push(100);
+  const sessions = uniq(win.map((s) => s.date)).length;
+  // hard sets per group, per week
+  const gSets = {};
+  for (const s of win) if (s.rir == null || s.rir <= 2) { const g = groupOf(s.ex); if (g) gSets[g] = (gSets[g] || 0) + 1; }
+  for (const g of Object.keys(gSets)) gSets[g] = Math.round(gSets[g] / weeks);
+  return { empty: false, lifts, sessions, idx, end, from, gSets, sets: win };
 }
 
-function renderSessionLog() {
-  const log = buildSessionLog();
-  const shown = log.slice(0, state.logLimit);
-  const pend = log.filter(sn => sn.submitted).length;
-  $("log-meta").textContent = log.length
-    ? `${log.length} session${log.length === 1 ? "" : "s"}` +
-      (pend ? ` · ${pend} not yet in log.csv` : "")
-    : "nothing logged yet";
-  $("btn-more").hidden = shown.length >= log.length;
-  $("btn-more").textContent = `Show more (${log.length - shown.length} older)`;
+// The 7-day / last-week / 4-week-average table. Weeks are counted back from the last
+// logged session, not the calendar.
+function kpiView() {
+  const sets = allSets();
+  if (!sets.length) return null;
+  const last = sets[sets.length - 1].date;
+  const wk = (d) => Math.floor(dayDiff(last, d) / 7);
+  const ex = {};
+  for (const s of sets) {
+    const x = (ex[s.ex] = ex[s.ex] || { ex: s.ex, w: {}, pr: null });
+    const k = wk(s.date);
+    const b = (x.w[k] = x.w[k] || { sets: 0, ton: 0, best: 0, hl: 0 });
+    if (s.rir == null || s.rir <= 2) { b.sets++; b.hl += s.load; }
+    b.ton += s.load * s.reps;
+    b.best = Math.max(b.best, s.e1);
+    if (!x.pr || s.e1 > x.pr.e1 + 1e-9) x.pr = { e1: s.e1, date: s.date, w: s.w, reps: s.reps };
+  }
+  return { last, ex };
+}
 
-  $("sessionlog").innerHTML = shown.map(sn => {
-    const lifts = sn.exercises.map(e => {
-      const cell = (s) => e.bw ? `bw×${s.reps}` : fmtW(s.weight_kg, e.ex);
-      const weights = e.sets.map(cell).join(" · ");
-      const prevTxt = e.prevBw ? `${e.prevTop} reps` : fmtW(e.prevTop, e.ex);
-      const prev = e.prevDate === null
-        ? `<span class="slogprev">first time</span>`
-        : `<span class="slogprev">prev ${prevTxt}` +
-          `${e.gap ? ` · ${e.gap}d` : ""}</span>`;
-      const d = e.delta;
-      const dcls = d === null || d === 0 ? "" : d > 0 ? "up" : "down";
-      const dtxt = d === null ? "" : d === 0 ? "=" :
-        `${d > 0 ? "+" : ""}${d}${e.bw ? "r" : ""}`;
-      return `<div class="slogrow">
-        <span class="slogex">${label(e.ex)}</span>
-        <span class="slogw">${weights}</span>
-        ${prev}
-        <span class="slogd ${dcls}">${dtxt}</span></div>`;
-    }).join("");
-    return `<div class="slog">
-      <div class="sloghead">
-        <span class="slogdate">${sn.date}</span>
-        <span class="slogday">${weekdayOf(sn.date)}</span>
-        <span class="slogsets">${sn.setCount} sets</span>
-        ${sn.submitted ? `<span class="slogbadge">submitted</span>
-          <button class="slogdel" data-date="${sn.date}" aria-label="Remove ${sn.date}">remove</button>` : ""}
-      </div>${lifts}</div>`;
+// The double-progression rule. The ONE load source in the app.
+function prescribe(ex) {
+  const lib = libOf(ex);
+  if (!lib || lib.increment == null) return { needs: true, w: 0, r: 8 };
+  const [floor, ceil] = lib.rep_range;
+  const inc = lib.increment;
+  const hist = allSets().filter((s) => s.ex === ex);
+  if (!hist.length) return { w: 0, r: floor, why: "no baseline" };
+  const lastDate = hist[hist.length - 1].date;
+  const lastSets = hist.filter((s) => s.date === lastDate);
+  const w = lastSets[0].w;
+  if (lastSets.some((s) => s.reps < floor && s.rir === 0)) {
+    const dropped = Math.max(0, Math.floor((w * 0.9) / inc) * inc);
+    return { w: dropped, r: floor, why: "deload" };
+  }
+  if (lastSets.every((s) => s.reps >= ceil && s.rir != null && s.rir <= 2)) {
+    return { w: +(w + inc).toFixed(2), r: floor, why: "progress" };
+  }
+  const best = Math.max(...lastSets.map((s) => s.reps));
+  return { w, r: Math.min(ceil, best + 1), why: "hold" };
+}
+
+/* ------------------------------------------------------ effective day / session */
+
+// The day's lifts: the session plan's week, plus any ad-hoc extra sets, in the order
+// the session was reordered into (session-scoped, never written back to the plan).
+function sessionLifts() {
+  const L = ensureLive();
+  const week = weekOf(L.plan);
+  const src = week[weekdayOf(L.date)] || [];
+  const per = bySession(allSets().filter((s) => s.date < L.date));
+  let list = src.map(([ex, sets]) => {
+    const x = per[ex];
+    const top = x ? x.series[x.series.length - 1].top : null;
+    return {
+      ex, name: disp(ex), muscle: primeOf(ex), planSets: sets,
+      sets: sets + (L.extra[ex] || 0),
+      top: top ? `${top.w} × ${top.reps}` : null,
+      done: (L.logged[ex] || []).length,
+    };
+  });
+  if (L.order) {
+    const ix = (n) => { const i = L.order.indexOf(n); return i < 0 ? 999 : i; };
+    list = list.slice().sort((a, b) => ix(a.ex) - ix(b.ex));
+  }
+  return list;
+}
+
+/* ----------------------------------------------------------------- the render */
+
+function renderAll() {
+  renderHeader();
+  renderSession();
+  renderCardio();
+  renderProgress();
+  renderPlan();
+  renderHistory();
+  renderOverlay();
+  for (const b of document.querySelectorAll("nav button")) {
+    const on = b.dataset.tab === state.tab;
+    b.setAttribute("aria-selected", on ? "true" : "false");
+    $(`p-${b.dataset.tab}`).hidden = !on;
+  }
+}
+
+function renderHeader() {
+  const sets = allSets();
+  const n = uniq(sets.map((s) => s.date)).length;
+  const dirty = dirtyCount();
+  let meta;
+  if (state.tab === "Cardio") meta = `${plural(state.cardio.length, "cardio session")}`;
+  else if (state.tab === "Plan") meta = dirty ? `${plural(dirty, "unpublished edit")}` : "plan published";
+  else meta = `${n} session${n === 1 ? "" : "s"} · ${sets.length} sets`;
+  const sync = store.state === "synced" ? "" : store.state === "error" ? " · offline" : " · local only";
+  $("hmeta").textContent = meta + sync;
+}
+
+const storeBanner = () => (store.state === "synced" ? "" : `
+  <div class="banner"><span class="tag">local</span><div>
+    <b>Saved on this phone only.</b> ${store.detail === "not_configured"
+    ? "Connect a Blob store to this Vercel project and every session syncs across devices."
+    : "The store could not be reached - sets are queued here and go up on the next load."}
+  </div></div>`);
+
+/* ------------------------------------------------------------------- 1 Session */
+
+function renderSession() {
+  const L = ensureLive();
+  const lifts = sessionLifts();
+  const setsTotal = sum(lifts.map((l) => l.sets));
+  const doneAll = sum(Object.values(L.logged).map((v) => v.length));
+  const muscles = uniq(lifts.map((l) => TO_GROUP[l.muscle] || l.muscle).filter(Boolean));
+  const planName = (state.plans[L.plan] || {}).name || L.plan;
+
+  const rows = lifts.map((l, i) => {
+    const full = l.done >= l.sets;
+    const extra = l.sets - l.planSets;
+    const img = (EXERCISES[l.ex] || {}).image;
+    return `<div class="liftrow${full ? " done" : ""}" role="button" tabindex="0" data-act="open-sheet" data-ex="${esc(l.ex)}">
+      <span class="tile">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : esc(initials(l.ex))}</span>
+      <span class="mid">
+        <span class="nm">${esc(l.name)}</span>
+        <span class="sub">${esc(disp(l.muscle || "custom"))} · last ${l.top ? esc(l.top) : "—"}</span>
+      </span>
+      ${state.reorder ? `<span class="arrows">
+        <button class="step" data-act="move" data-ex="${esc(l.ex)}" data-dir="-1" ${i === 0 ? "disabled" : ""} aria-label="move up"><span>▲</span></button>
+        <button class="step" data-act="move" data-ex="${esc(l.ex)}" data-dir="1" ${i === lifts.length - 1 ? "disabled" : ""} aria-label="move down"><span>▼</span></button>
+      </span>` : `<span class="rt">
+        <span class="n">${l.done}/${l.sets}</span>
+        <span class="st${extra > 0 ? " extra" : ""}">${extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
+      </span>`}
+    </div>`;
   }).join("");
 
-  if (!log.length)
-    $("sessionlog").innerHTML = `<p class="empty">No sessions yet. Log one on Today and
-      press Submit - it appears here, and becomes the reference the next one is read against.</p>`;
-
-  for (const btn of $("sessionlog").querySelectorAll(".slogdel")) {
-    btn.onclick = () => {
-      const d = btn.dataset.date;
-      if (!confirm(`Remove the session submitted on ${d}? It has not reached log.csv yet.`)) return;
-      state.committed = state.committed.filter(r => r.date !== d);
-      state.remote = state.remote.filter(r => r.date !== d);
-      saveCommitted();
-      queueDate(d);      // now empty locally, so the flush deletes the document
-      flushQueue();
-      renderToday(); renderTrends();
-    };
-  }
-}
-
-function renderTrends() {
-  renderLocalNote();
-  renderKpis(); renderLiftGrid(); renderDetail(); renderMeters();
-  renderBridge(); renderStalls(); renderBalance(); renderIndex();
-  renderSessionLog();
-}
-
-// -------------------------------------------------------------- PLAN view
-function loadRoutine() {
-  try {
-    const raw = localStorage.getItem(STORE_ROUTINE);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    // A local edit is only valid against the routine.yaml it was made from. If a new
-    // one has shipped since, the stored copy is dropped and the file wins - otherwise
-    // any device that ever opened the Plan tab would be pinned to that old snapshot
-    // forever and would silently never see a deployed routine change again.
-    if (!d) return;
-    // Plan NAMES are not tied to the file: a plan this device created, or renamed, must
-    // survive a publish or the switcher forgets what its own plans are called.
-    if (d.planName) state.planName = d.planName;
-    const by = d.routineBy || (d.routine ? { [ACTIVE_PLAN]: d.routine } : null);
-    if (!by) return;
-    if (d.base === routineFingerprint(PLANS)) { state.routineBy = by; return; }
-    // A newer routine.yaml has shipped. The stored structural edits were made against a
-    // plan that no longer exists, so they cannot be carried over - but saying nothing is
-    // how a set-count change disappears without anyone noticing. Count it and show it.
-    // A plan the file does not have is NOT dropped: nothing newer can have replaced it.
-    for (const [pid, r] of Object.entries(by)) {
-      if (!PLANS[pid]) { state.routineBy[pid] = r; continue; }
-      state.dropped += DAYS.reduce((n, k) => n + (r.week?.[k]?.plan?.length || 0), 0);
-    }
-    try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
-  } catch { /* ignore */ }
-}
-// ------------------------------------------------- the order of a day's lifts
-// Reordering is COSMETIC: it moves nothing between muscles, so it changes no volume and
-// therefore no band. That makes it the one plan edit the phone can own outright - it
-// never has to reach routine.yaml, and unlike a set-count change it is not invalidated
-// when a new routine.yaml ships.
-//
-// It is stored as a list of exercise NAMES per day, not as positions, so it survives a
-// deploy: a lift the file dropped simply falls out of the list, and one the file added
-// lands at the end rather than silently displacing something.
-const STORE_ORDER = "strengthlog.order.v1";
-const STORE_SETS = "strengthlog.sets.v1";
-
-// THE day's plan, and the only place it is assembled: the published routine.yaml (or a
-// structural edit of it), with this device's set-count overrides applied, in this
-// device's order. Today, the Plan tab and the export all read this, so they cannot
-// disagree with each other.
-// Order and set counts are per PLAN as well as per day. They are overrides on a
-// specific week of lifts, so letting one plan's counts apply to another would quietly
-// rewrite a block you are not running - and two blocks exist precisely because they are
-// not the same week.
-const orderOf = (pid) => (state.order[pid] ||= {});
-const setsOf = (pid) => (state.setsBy[pid] ||= {});
-const orderBy = () => orderOf(state.plan);
-const setsByPlan = () => setsOf(state.plan);
-const routineOf = (pid) => state.routineBy[pid] ||
-  PLANS[pid] || { name: planName(pid), week: blankWeek(), lifts: [] };
-
-function effectivePlan(dayKey, pid = state.plan) {
-  const base = routineOf(pid).week[dayKey].plan;
-  const ov = setsOf(pid)[dayKey] || {};
-  const withSets = base.map(p =>
-    ov[p.exercise] ? { ...p, sets: clamp(ov[p.exercise], 1, 8) } : p);
-  return orderedPlan(dayKey, withSets, pid);
-}
-
-// Set counts are stored BY EXERCISE NAME, exactly like the order and for exactly the
-// same reason: a snapshot of the whole routine is invalidated the moment a new
-// routine.yaml ships, which is how every set count typed on the phone was being wiped by
-// the next publish. An override by name survives it - and an override that matches the
-// file is not an override at all, so it is dropped rather than left to shadow a later
-// change silently.
-function setOverride(dayKey, exercise, n) {
-  const fileSets = filePlan().week[dayKey]?.plan.find(p => p.exercise === exercise)?.sets;
-  const all = setsByPlan();
-  const day = all[dayKey] || (all[dayKey] = {});
-  if (n === fileSets) delete day[exercise]; else day[exercise] = n;
-  if (!Object.keys(day).length) delete all[dayKey];
-  savePrefs([dayKey]);
-}
-
-function orderedPlan(dayKey, plan, pid = state.plan) {
-  const want = orderOf(pid)[dayKey];
-  if (!Array.isArray(want) || !want.length) return plan;
-  const rank = new Map(want.map((e, i) => [e, i]));
-  // Stable: anything the stored order has never seen keeps its file position, after
-  // everything it does know about.
-  return [...plan].sort((a, b) =>
-    (rank.has(a.exercise) ? rank.get(a.exercise) : want.length + plan.indexOf(a)) -
-    (rank.has(b.exercise) ? rank.get(b.exercise) : want.length + plan.indexOf(b)));
-}
-
-// A stamp addresses one plan's one day. Two plans have a mon each and they are edited
-// independently, so a stamp keyed by weekday alone would let an edit to one block
-// out-rank an edit to the other.
-const stampKey = (pid, day) => `${pid}/${day}`;
-const splitKey = (k) => {
-  const i = k.indexOf("/");
-  return i < 0 ? [ACTIVE_PLAN, k] : [k.slice(0, i), k.slice(i + 1)];
-};
-const atPath = (map, pid, day) => (map[pid] || {})[day];
-
-// The document stamp is the newest thing in it, so another device can still tell a whole
-// document apart; the per-day stamps are what actually decide a merge.
-function prefsStamp() {
-  const all = [...Object.values(state.orderAtBy), ...Object.values(state.setsAtBy)]
-    .filter(Boolean).sort();
-  const newest = all.length ? all[all.length - 1] : null;
-  return (state.orderAt && (!newest || state.orderAt > newest)) ? state.orderAt
-       : (newest || new Date().toISOString());
-}
-
-// Writes what is in memory to THIS BROWSER and nothing else. Everything derived rather
-// than typed goes through here.
-function persistPrefs() {
-  const stamp = prefsStamp();
-  try {
-    localStorage.setItem(STORE_ORDER, JSON.stringify(
-      { days: state.order, at: state.orderAtBy, plan: state.plan,
-        updated_at: stamp, schema: 3 }));
-    localStorage.setItem(STORE_SETS, JSON.stringify(
-      { days: state.setsBy, at: state.setsAtBy, updated_at: stamp, schema: 3 }));
-  } catch { /* private mode */ }
-}
-
-// `days` is what this EDIT touched - weekday strings for the selected plan, or explicit
-// [plan, day] pairs. Only those get a new stamp, and only a day with a newer stamp can
-// overwrite another device's copy of it. Calling this with no days saves locally and
-// pushes nothing: a cleanup that changed nothing the user typed must never re-publish a
-// whole map, because a stale view doing exactly that is how a reorder and a set count
-// were being silently reverted a few seconds after being made.
-function savePrefs(days) {
-  const touched = (Array.isArray(days) ? days : []).filter(Boolean)
-    .map(d => Array.isArray(d) ? stampKey(d[0], d[1]) : stampKey(state.plan, d));
-  if (touched.length) {
-    const now = new Date().toISOString();
-    for (const k of touched) { state.orderAtBy[k] = now; state.setsAtBy[k] = now; }
-    state.orderAt = now;
-    state.orderDirty = true;
-  }
-  // Stamp first, THEN take in what another view of this page has written since this one
-  // loaded. In that order the edit just made always out-ranks the older copy, and the
-  // days this view has never seen are carried rather than erased - publishing a whole
-  // map assembled from one page's memory is what was wiping the other page's work.
-  absorbLocalPrefs();
-  persistPrefs();
-  if (touched.length) flushQueue();
-}
-
-// The same page open twice shares one localStorage, so this is the cheap half of the
-// merge - no network, and it runs before every write.
-function absorbLocalPrefs() {
-  try {
-    mergePrefsMap(state.order, state.orderAtBy,
-      JSON.parse(localStorage.getItem(STORE_ORDER) || "null"));
-    mergePrefsMap(state.setsBy, state.setsAtBy,
-      JSON.parse(localStorage.getItem(STORE_SETS) || "null"));
-  } catch { /* ignore */ }
-}
-
-// Merge one prefs document plan by plan and day by day. A day the remote stamped later
-// than this device did replaces the local copy; a day this device stamped later is kept
-// and pushed on the next flush. Neither side can take the whole week any more.
-// The stamp map is the authority, not the day map: a key WITH a stamp and no entry is a
-// deliberate clearing (Reset to file, or the last override on that day removed), and a
-// key with no stamp at all is one this document knows nothing about - the case that must
-// be left alone rather than treated as a deletion.
-function mergePrefsMap(localMap, localAt, doc) {
-  const remote = planKeyed((doc && doc.days) || {});
-  const rAt = atKeyed((doc && doc.at) || {});
-  const docStamp = String((doc && doc.updated_at) || "");
-  const keys = new Set(Object.keys(rAt));
-  for (const pid of Object.keys(remote))
-    for (const day of Object.keys(remote[pid] || {})) keys.add(stampKey(pid, day));
-  let changed = false;
-  for (const key of keys) {
-    const [pid, day] = splitKey(key);
-    const rs = String(rAt[key] || docStamp || "");
-    const ls = String(localAt[key] || "");
-    if (!rs || (ls && rs <= ls)) continue;          // this device knows that day better
-    const has = Object.prototype.hasOwnProperty.call(remote[pid] || {}, day);
-    const val = has ? JSON.parse(JSON.stringify(remote[pid][day])) : undefined;
-    if (JSON.stringify(atPath(localMap, pid, day)) !== JSON.stringify(val)) changed = true;
-    if (has) (localMap[pid] ||= {})[day] = val;
-    else if (localMap[pid]) {
-      delete localMap[pid][day];
-      if (!Object.keys(localMap[pid]).length) delete localMap[pid];
-    }
-    localAt[key] = rs;
-  }
-  return changed;
-}
-
-// Both prefs used to be keyed by weekday alone, from before plans existed. Anything
-// stored in that shape belongs to the plan that was active then - the one the file
-// shipped - so it is nested under it rather than thrown away or, worse, left to apply to
-// every plan at once. Detected by the keys: a weekday key at the top means the old shape.
-function planKeyed(days) {
-  if (!days || typeof days !== "object") return {};
-  return Object.keys(days).some(k => DAYS.includes(k))
-    ? { [ACTIVE_PLAN]: days }
-    : days;
-}
-// The same upgrade for a stamp map: bare weekday keys were written before plans existed
-// and belong to the plan that was active then.
-function atKeyed(at) {
-  if (!at || typeof at !== "object") return {};
-  const out = {};
-  for (const [k, v] of Object.entries(at))
-    out[DAYS.includes(k) ? stampKey(ACTIVE_PLAN, k) : k] = v;
-  return out;
-}
-const saveOrder = savePrefs;   // reordering and set counts share one prefs write
-function loadOrder() {
-  try {
-    const d = JSON.parse(localStorage.getItem(STORE_ORDER) || "null");
-    if (d && d.days) {
-      state.order = planKeyed(d.days);
-      state.orderAt = d.updated_at || null;
-      state.orderAtBy = atKeyed(d.at);
-    }
-    if (d && d.plan) state.plan = d.plan;
-    const t = JSON.parse(localStorage.getItem(STORE_SETS) || "null");
-    if (t && t.days) {
-      state.setsBy = planKeyed(t.days);
-      state.setsAtBy = atKeyed(t.at);
-      if (!state.orderAt || (t.updated_at && t.updated_at > state.orderAt))
-        state.orderAt = t.updated_at;
-    }
-    // A copy written before per-day stamps existed: give every day it holds the only
-    // stamp it has, so it still merges rather than being treated as never-edited.
-    for (const [map, at] of [[state.order, state.orderAtBy], [state.setsBy, state.setsAtBy]])
-      for (const pid of Object.keys(map))
-        for (const day of Object.keys(map[pid] || {}))
-          if (!at[stampKey(pid, day)]) at[stampKey(pid, day)] = state.orderAt || "";
-  } catch { /* ignore */ }
-  if (!planIds().includes(state.plan)) state.plan = ACTIVE_PLAN;
-  pruneOverrides();
-}
-
-// An override equal to the file's value is not an override. setOverride() refuses to
-// store one; this applies the same rule to what is ALREADY stored, so a routine change
-// cannot leave redundant entries behind that count as drift and shadow the file.
-function pruneOverrides() {
-  let changed = false;
-  for (const pid of Object.keys(state.setsBy)) {
-    const week = (PLANS[pid] || {}).week;
-    if (!week) continue;              // a plan of this device's own - no file to compare to
-    const days = state.setsBy[pid];
-    for (const day of Object.keys(days)) {
-      const file = new Map((week[day]?.plan || []).map(p => [p.exercise, p.sets]));
-      for (const ex of Object.keys(days[day]))
-        if (file.get(ex) === days[day][ex]) { delete days[day][ex]; changed = true; }
-      if (!Object.keys(days[day]).length) { delete days[day]; changed = true; }
-    }
-    if (!Object.keys(days).length) { delete state.setsBy[pid]; changed = true; }
-  }
-  // Derived, not typed: this only drops overrides that already equal the file, so it
-  // saves locally and publishes nothing. Pushing here would stamp the whole week on
-  // every load and hand a freshly opened tab the power to overwrite a real edit.
-  if (changed) persistPrefs();
-}
-
-function saveRoutine() {
-  try {
-    localStorage.setItem(STORE_ROUTINE, JSON.stringify(
-      { base: routineFingerprint(PLANS), routineBy: state.routineBy,
-        planName: state.planName }));
-  } catch { /* private mode */ }
-}
-function ensureEditable() {
-  if (!state.routineBy[state.plan])
-    state.routineBy[state.plan] = JSON.parse(JSON.stringify(filePlan()));
-}
-
-// A provisional lift's missing half. Shown open while the lift is unusable, so the
-// blocker is the first thing on screen rather than something to go hunting for.
-function defPanel(key, open) {
-  const p = state.provisional[key];
-  const [floor, ceiling] = p.rep_range || [null, null];
-  return `<div class="exdef" data-role="def" data-key="${key}" ${open ? "" : "hidden"}>
-    ${p.image ? `<button class="thumb defthumb" data-role="preview" data-img="${p.image}"
-        aria-label="Show photo"><img src="${p.image}" alt=""></button>` : ""}
-    <div class="deflab">prime movers only</div>
-    <div class="defmus">${MUSCLES.map(m =>
-      `<button class="mchip ${p.muscles.includes(m) ? "on" : ""}" data-m="${m}">${m}</button>`
-    ).join("")}</div>
-    <div class="defnums">
-      <label>increment kg
-        <input type="number" step="0.5" min="0" data-f="inc" value="${p.increment ?? ""}" placeholder="?">
-      </label>
-      <label>reps
-        <input type="number" min="1" data-f="floor" value="${floor ?? ""}" placeholder="floor">
-        <span>&ndash;</span>
-        <input type="number" min="1" data-f="ceiling" value="${ceiling ?? ""}" placeholder="ceil">
-      </label>
-      <label class="defbw">
-        <input type="checkbox" data-f="bw" ${p.bodyweight ? "checked" : ""}> bodyweight
-      </label>
+  $("p-Session").innerHTML = `
+    ${storeBanner()}
+    <div class="screenhead">
+      <div>
+        <div class="kicker">${fmtDate(L.date)} · ${esc(planName)}</div>
+        <h1>${lifts.length ? esc(muscles.slice(0, 3).join(" + ")) : "Rest day"}</h1>
+      </div>
+      <div class="right">
+        <div class="count">${doneAll}<span>/${setsTotal}</span></div>
+        <div class="caption">sets logged</div>
+      </div>
     </div>
-    <p class="defnote">${p.note ? `<b>${p.note}</b><br>` : ""}Read the increment off the
-      stack. A guess corrupts every future prescription for this lift, silently.</p>
+
+    <div class="chiprow">
+      <button class="chip" data-act="open-switch">plan <b>${esc(planName)}</b> <span class="mono">⌄</span></button>
+      ${lifts.length > 1 ? `<button class="btn sm" data-act="toggle-reorder">${state.reorder ? "Done" : "Reorder"}</button>` : ""}
+    </div>
+
+    ${lifts.length ? `<div class="liftlist">${rows}</div>` : `
+      <div class="empty"><b>Nothing scheduled for ${DAY_LABEL[weekdayOf(L.date)]}.</b>
+        Add lifts to this day on the Plan tab, or switch to a plan that trains today.</div>`}
+
+    ${lifts.length ? `<button class="btn primary" data-act="finish">
+      ${doneAll ? `Finish session · write ${plural(doneAll, "set")} to the log` : "Finish session"}</button>` : ""}
+    <button class="btn ghost" data-act="go-cardio">+ Log cardio for this visit</button>
+
+    <p class="foot">Last-set figures come from your own log. Loads come from the
+      double-progression rule, never from feel. Finishing writes the session to the
+      store, where Progress and History read it.</p>`;
+}
+
+/* -------------------------------------------------------------------- 1b Cardio */
+
+function cardioView() {
+  const t = today();
+  const dow = (new Date(t + "T00:00:00").getDay() + 6) % 7;
+  const monday = addDays(t, -dow);
+  const wk = (s) => Math.floor((dayDiff(monday, s) + 6) / 7);
+  const counts = {};
+  for (const c of state.cardio) { const k = wk(c.date); if (k >= 0) counts[k] = (counts[k] || 0) + 1; }
+  const n = (k) => counts[k] || 0;
+  const done = n(0), left = Math.max(0, CARDIO_GOAL - done), daysLeft = 7 - dow;
+  let streak = 0;
+  for (let k = done >= CARDIO_GOAL ? 0 : 1; n(k) >= CARDIO_GOAL; k++) streak++;
+  return { t, dow, monday, n, done, left, daysLeft, streak };
+}
+
+const pace = (c) => {
+  if (!c.km || !/run|Treadmill/i.test(c.type)) return null;
+  const p = c.min / c.km, m = Math.floor(p), s = Math.round((p - m) * 60);
+  return `${m}:${String(s).padStart(2, "0")} /km`;
+};
+
+function renderCardio() {
+  const V = cardioView();
+  const num = (v) => parseFloat(v) || 0, f1 = (x) => String(+x.toFixed(1));
+  const min = num(state.cMin), km = num(state.cKm);
+  const selDate = state.cDate || V.t;
+
+  const weeks = [...Array(8)].map((_, i) => 7 - i);
+  const max = Math.max(CARDIO_GOAL + 1, ...weeks.map(V.n));
+  const bars = weeks.map((k) => {
+    const v = V.n(k), h = Math.max(2, Math.round((v / max) * 72));
+    const bg = !v ? "var(--color-neutral-800)" : v >= CARDIO_GOAL ? "var(--color-accent)" : "var(--color-accent-dim)";
+    return `<div class="col"><span class="n">${v || "—"}</span>
+      <span class="bar" style="height:${h}px;background:${bg}"></span>
+      <span class="d">${esc(fmtDate(addDays(V.monday, -7 * k)))}</span></div>`;
+  }).join("");
+
+  const types = CARDIO_TYPES.map((x) =>
+    `<button class="pill ui" data-act="c-type" data-v="${esc(x)}" aria-pressed="${state.cType === x}" style="justify-content:center">${esc(x)}</button>`).join("");
+  const whenOpts = [["visit", "With today's lifting"], ["sep", "Separate session"]].map(([k, l]) =>
+    `<button class="pill ui" data-act="c-when" data-v="${k}" aria-pressed="${state.cWhen === k}" style="justify-content:center">${esc(l)}</button>`).join("");
+  const dayStrip = [...Array(7)].map((_, i) => {
+    const d = addDays(V.t, i - 6);
+    return `<button class="day" data-act="c-date" data-v="${d}" aria-pressed="${selDate === d}">
+      <span class="k">${DAY_LABEL[weekdayOf(d)]}</span><span class="n">${+d.slice(8)}</span></button>`;
+  }).join("");
+
+  $("p-Cardio").innerHTML = `
+    ${storeBanner()}
+    <div>
+      <div class="kicker">Week of ${esc(fmtDate(V.monday))} · goal ${CARDIO_GOAL}× a week</div>
+      <h1 class="verdict">${V.left ? `${plural(V.left, "more session")} to keep the streak.` : "Goal hit this week."}</h1>
+    </div>
+
+    <div class="hgrid two">
+      <div class="kpi"><div class="k">Streak</div>
+        <div class="v">${V.streak}<span style="font-size:13px;color:var(--color-neutral-600)"> wk</span></div>
+        <div class="s">weeks in a row at ${CARDIO_GOAL}×${V.done >= CARDIO_GOAL ? "" : " · this week open"}</div></div>
+      <div class="kpi"><div class="k">Left this week</div>
+        <div class="v accent">${V.left}<span style="font-size:13px;color:var(--color-neutral-600)">${V.left ? ` of ${CARDIO_GOAL}` : ""}</span></div>
+        <div class="s">${V.done} done · ${V.left ? plural(V.daysLeft, "day") + " left" : "streak extended"}</div></div>
+    </div>
+
+    <section class="card">
+      <div class="cardhead"><span class="label">Sessions per week</span>
+        <span class="meta">goal ${CARDIO_GOAL} · accent = hit</span></div>
+      <div class="bars">${bars}</div>
+    </section>
+
+    <section class="card">
+      <div class="cardhead"><span class="label">Log cardio</span></div>
+      <div class="grid4">${types}</div>
+      <div class="grid2">${whenOpts}</div>
+      ${state.cWhen === "sep" ? `<div class="grid7">${dayStrip}</div>` : ""}
+      <div class="grid2">
+        <div class="stepper"><span class="label">Duration · min</span><div class="row">
+          <button class="step" data-act="c-min" data-d="-5" aria-label="less"><span>−</span></button>
+          <input class="val mono" id="c-min" inputmode="numeric" value="${esc(state.cMin)}">
+          <button class="step" data-act="c-min" data-d="5" aria-label="more"><span>+</span></button></div></div>
+        <div class="stepper"><span class="label">Distance · km</span><div class="row">
+          <button class="step" data-act="c-km" data-d="-0.5" aria-label="less"><span>−</span></button>
+          <input class="val mono" id="c-km" inputmode="decimal" value="${esc(state.cKm)}">
+          <button class="step" data-act="c-km" data-d="0.5" aria-label="more"><span>+</span></button></div></div>
+      </div>
+      <button class="btn primary" data-act="c-log" ${min > 0 ? "" : "disabled"}>
+        ${min > 0 ? `Log ${min} min ${esc(state.cType.toLowerCase())}${km > 0 ? ` · ${f1(km)} km` : ""}` : "Enter a duration"}</button>
+      ${state.cLast ? `<div class="confirm"><span class="t">Logged ${esc(state.cLast.type.toLowerCase())} · ${state.cLast.min} min${state.cLast.km ? ` · ${f1(state.cLast.km)} km` : ""}${pace(state.cLast) ? ` · ${pace(state.cLast)}` : ""} · ${esc(fmtDate(state.cLast.date))}</span>
+        <button class="btn sm" data-act="c-undo">Undo</button></div>` : ""}
+    </section>
+
+    <p class="foot">Cardio keeps a weekly goal and nothing else - no trend, no list. Any
+      session counts, same visit or separate. It never enters a strength derivation.</p>`;
+}
+
+/* ------------------------------------------------------------------ 4 Progress */
+
+function renderProgress() {
+  const weeks = parseInt(state.win, 10);
+  const W = windowView(weeks);
+  const windows = ["4 wk", "8 wk", "12 wk"].map((k) =>
+    `<button class="pill" data-act="win" data-v="${k}" aria-pressed="${state.win === k}">${k}</button>`).join("");
+
+  if (W.empty) {
+    $("p-Progress").innerHTML = `
+      <div class="pills">${windows}</div>
+      <div class="empty"><b>No sets logged yet.</b>
+        Progress reads your own set log. Log a session and the verdict, the weekly table
+        and the per-lift history all start from there - nothing here is seeded.</div>
+      <p class="foot">Strength is Epley e1RM from each session's best set. A lift needs
+        ${MIN_N} sessions in the window before it is rated.</p>`;
+    return;
+  }
+
+  const bcnt = (k) => W.lifts.filter((l) => l.bucket === k).length;
+  const rated = W.lifts.length - bcnt("thin");
+  const ichg = mean2(W.idx, false) ? (mean2(W.idx, true) / mean2(W.idx, false) - 1) * 100 : 0;
+  const head = ichg >= NOISE ? "You are getting stronger."
+    : ichg <= -NOISE ? "Strength is slipping." : "Strength is holding, not rising.";
+
+  // --- focus next
+  const gChg = {};
+  for (const l of W.lifts) if (l.bucket !== "thin" && l.group) (gChg[l.group] = gChg[l.group] || []).push(l.chg);
+  const focus = [];
+  for (const g of GROUPS) {
+    const c = gChg[g] ? avg(gChg[g]) : null;
+    if (c == null) continue;
+    const v = W.gSets[g] || 0, st = covStatus(v);
+    if (c <= -NOISE) {
+      focus.push({
+        t: `${cap(g)} strength down ${Math.abs(c).toFixed(1)}%`,
+        b: st === "optimal" || st === "high"
+          ? `Volume is already ${v} sets a week, so more sets won't fix it. Check recovery, and whether these lifts come late in the session.`
+          : `Only ${v} hard sets a week. Add 2–3 sets a week before changing anything else.`,
+      });
+    } else if (Math.abs(c) < NOISE && (st === "minimum" || st === "missed")) {
+      focus.push({
+        t: `${cap(g)} flat on ${v} sets a week`,
+        b: "That's under the 10-set range where most gains happen. Add 2–4 sets a week.",
+      });
+    }
+  }
+
+  // --- weekly KPIs
+  const kpiHtml = renderKpi();
+
+  const spark = (arr, w, h) => {
+    if (!arr || arr.length < 2) return "";
+    const mn = Math.min(...arr), mx = Math.max(...arr), sp = mx - mn || 1;
+    return arr.map((v, i) => `${((i / (arr.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - mn) / sp) * (h - 4)).toFixed(1)}`).join(" ");
+  };
+  const idxPts = spark(W.idx, 200, 44);
+  const baseY = (() => {
+    const mn = Math.min(...W.idx), mx = Math.max(...W.idx), sp = mx - mn || 1;
+    return (44 - 2 - ((mean2(W.idx, false) - mn) / sp) * 40).toFixed(1);
+  })();
+
+  $("p-Progress").innerHTML = `
+    <div class="pills">${windows}</div>
+
+    <div>
+      <div class="kicker">${state.win} window · to ${esc(fmtDate(W.end))}</div>
+      <h1 class="verdict">${head}</h1>
+      <div class="sparkwrap" style="margin-top:12px">
+        <span class="mono" style="font-size:30px;font-weight:500;color:${ichg < -NOISE ? "var(--color-accent-300)" : "var(--color-text)"}">${pct(ichg)}</span>
+        ${idxPts ? `<svg class="chart" viewBox="0 0 200 44" style="flex:1;max-width:200px" aria-hidden="true">
+          <line x1="0" y1="${baseY}" x2="200" y2="${baseY}" stroke="var(--color-neutral-800)" stroke-width="1" stroke-dasharray="3 3"/>
+          <polyline points="${idxPts}" fill="none" stroke="var(--color-accent)" stroke-width="1.5" stroke-linejoin="round"/>
+        </svg>` : ""}
+      </div>
+      <p class="body" style="margin:10px 0 0">Across ${rated} lift${rated === 1 ? "" : "s"} over
+        ${plural(W.sessions, "session")}: ${bcnt("up")} stronger, ${bcnt("flat")} flat, ${bcnt("down")} weaker.</p>
+    </div>
+
+    <div class="sectionlabel">Focus next</div>
+    ${focus.length ? focus.slice(0, 3).map((f) =>
+      `<div class="focuscard"><div class="t">${esc(f.t)}</div><div class="b">${esc(f.b)}</div></div>`).join("")
+      : `<div class="focuscard"><div class="t">Nothing needs changing.</div><div class="b">Keep running the plan.</div></div>`}
+
+    ${kpiHtml}
+
+    <div class="sectionlabel">Estimated 1RM</div>
+    <div class="hgrid" style="grid-template-columns:1fr">
+      ${W.lifts.slice().sort((a, b) => b.cur - a.cur).map((l) => `
+        <button class="krow x" data-act="lift" data-ex="${esc(l.ex)}">
+          <span><span class="kname">${esc(l.name)}</span>
+            <span class="kread">${esc(disp(l.muscle || ""))} · ${pct(l.rate, 2)}/wk · ${plural(l.n, "session")}</span></span>
+          <span class="num ${l.bucket === "up" ? "up" : l.bucket === "down" ? "down" : "flat"}">${
+            { progressing: "▲", maintaining: "=", plateauing: "▬", regressing: "▼" }[l.status] || "·"}</span>
+          <span class="num">${l.cur.toFixed(1)}</span>
+          <span class="num ${cls(l.chg, NOISE)}">${pct(l.chg)}</span>
+        </button>`).join("")}
+    </div>
+
+    <p class="foot">Strength = Epley e1RM from each session's best set; bodyweight lifts
+      carry ${BW_KG} kg. Change = mean of the last two sessions in the window against the
+      first two. ±${NOISE}% is noise and reads flat. A lift needs ${MIN_N} sessions
+      before it is rated. Hard set = RIR ≤ 2, credited to the prime mover only.</p>`;
+}
+
+function renderKpi() {
+  const K = kpiView();
+  const views = ["Muscles", "Exercises"].map((k) =>
+    `<button class="pill ui" data-act="kpiview" data-v="${k}" aria-pressed="${state.kpiView === k}">${k}</button>`).join("");
+  const bases = [["LW", "vs last wk"], ["4W", "vs 4-wk avg"]].map(([k, l]) =>
+    `<button class="pill ui" data-act="kpibase" data-v="${k}" aria-pressed="${state.kpiBase === k}">${l}</button>`).join("");
+  const head = `<div class="sectionlabel">Weekly</div>
+    <div class="pills">${views}</div><div class="pills">${bases}</div>`;
+  if (!K) return `${head}<div class="empty">Nothing logged in the last week.</div>`;
+
+  const B = state.kpiBase === "LW" ? [1] : [1, 2, 3, 4];
+  const rel = (a, b) => (a && b ? (a / b - 1) * 100 : null);
+  const per = Object.values(K.ex).map((x) => {
+    const g = (k) => x.w[k] || {}, s = (k) => g(k).sets || 0;
+    const al = (k) => (g(k).sets ? g(k).hl / g(k).sets : 0);
+    const sB = avg(B.map(s)), alB = avg(B.map(al).filter(Boolean));
+    const bB = avg(B.map((k) => g(k).best || 0).filter(Boolean));
+    const b0 = g(0).best || 0;
+    return {
+      ex: x.ex, name: disp(x.ex), group: groupOf(x.ex) || "other", pr: x.pr,
+      s0: s(0), sB, al0: al(0), t0: g(0).ton || 0, dLoad: rel(al(0), alB), dStr: rel(b0, bB), b0,
+      active: [0, 1, 2, 3, 4].some((k) => s(k) > 0),
+      prNow: x.pr && dayDiff(K.last, x.pr.date) < 7,
+    };
+  });
+  const setsDelta = (s0, sB) => state.kpiBase === "LW"
+    ? { v: s0 - sB, txt: `${sgn(s0 - sB)}${Math.abs(Math.round(s0 - sB))}`, noise: 1 }
+    : { v: rel(s0, sB), txt: pct(rel(s0, sB), 0), noise: 10 };
+  const read = (ds, dl) => {
+    if (ds == null && dl == null) return "not trained this week";
+    const sp = ds == null ? null : ds <= -10 ? "fewer sets" : ds >= 10 ? "more sets" : "same sets";
+    const lp = dl == null ? null : dl <= -2.5 ? "lighter" : dl >= 2.5 ? "heavier" : "same load";
+    return [sp, lp].filter(Boolean).join(", ");
+  };
+  const changeLabel = state.kpiBase === "LW" ? "Change vs last wk" : "Change vs 4-wk avg";
+  const colHead = `<div class="krow ${state.kpiView === "Muscles" ? "m" : "x"} khead">
+    ${state.kpiView === "Muscles" ? "<span></span>" : ""}<span>${esc(changeLabel)}</span>
+    <span class="r">Sets</span><span class="r">Δ Sets</span><span class="r">${state.kpiView === "Muscles" ? "Δ e1RM" : "of PR"}</span></div>`;
+
+  let rows;
+  if (state.kpiView === "Muscles") {
+    rows = GROUPS.map((gp) => {
+      const xs = per.filter((p) => p.group === gp && p.active);
+      if (!xs.length) return null;
+      const s0 = sum(xs.map((x) => x.s0)), sB = sum(xs.map((x) => x.sB));
+      const sd = setsDelta(s0, sB);
+      const dL = avg(xs.map((x) => x.dLoad).filter((v) => v != null));
+      const dS = avg(xs.map((x) => x.dStr).filter((v) => v != null));
+      return {
+        _k: dS ?? 0, html: `<div class="krow m">
+          <span class="dot ${covStatus(s0)}"></span>
+          <span><span class="kname">${esc(gp)}</span>
+            <span class="kread">${esc(s0 === 0 ? "not trained this week" : read(rel(s0, sB), dL))}</span></span>
+          <span class="num">${s0}</span>
+          <span class="num ${cls(sd.v, sd.noise)}">${sd.txt}</span>
+          <span class="num ${cls(dS, NOISE)}">${pct(dS)}</span></div>`,
+      };
+    }).filter(Boolean).sort((a, b) => a._k - b._k).map((x) => x.html).join("");
+  } else {
+    rows = per.filter((p) => p.active)
+      .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || b.s0 - a.s0)
+      .map((p) => {
+        const sd = setsDelta(p.s0, p.sB);
+        const of = p.b0 && p.pr ? (p.b0 / p.pr.e1) * 100 : null;
+        return `<button class="krow x" data-act="lift" data-ex="${esc(p.ex)}">
+          <span><span class="kname">${esc(p.name)}</span>
+            <span class="kread ${p.prNow ? "prnew" : "pr"}">${esc(p.group)} · PR ${p.pr.e1.toFixed(1)} kg · ${p.pr.w ? `${p.pr.w} × ` : ""}${p.pr.reps}${p.pr.w ? "" : " reps"} · ${esc(fmtDate(p.pr.date))}${p.prNow ? " · new" : ""}</span>
+            <span class="kread">${p.s0 ? `avg ${p.al0.toFixed(1)} kg/set · ${Math.round(p.t0).toLocaleString("en-GB")} kg total` : "not trained this week"}</span></span>
+          <span class="num">${p.s0}</span>
+          <span class="num ${cls(sd.v, sd.noise)}">${sd.txt}</span>
+          <span class="num ${of == null ? "none" : p.prNow ? "down" : "flat"}">${of == null ? "—" : `${Math.round(of)}%`}</span>
+        </button>`;
+      }).join("");
+  }
+
+  const note = state.kpiView === "Muscles"
+    ? "Sets = hard sets (RIR ≤ 2). Load = average kg per hard set, compared within each exercise then averaged for the muscle. Grey = within noise. Dot = this week's volume: red under 4, yellow 4–9, green 10–20, ring over 20."
+    : "“Of PR” = this week's best e1RM as a share of the all-time best; accent = new PR in the last 7 days. Tap a row for the lift's history.";
+
+  return `${head}
+    <div class="hgrid" style="grid-template-columns:1fr">${colHead}${rows || `<div class="empty">Nothing logged in the last 7 days.</div>`}</div>
+    <p class="foot">${esc(note)}</p>`;
+}
+
+/* ---------------------------------------------------------------------- 5 Plan */
+
+const weekSets = (week) => sum(DAYS.map((d) => sum((week[d] || []).map((x) => x[1]))));
+function groupTotals(week) {
+  const m = {}; for (const g of GROUPS) m[g] = 0;
+  for (const d of DAYS) for (const [ex, s] of week[d] || []) { const g = groupOf(ex); if (g in m) m[g] += s; }
+  return m;
+}
+// One edit is one lift changed, added or removed - not one changed day. Counting the
+// day's whole row made a single stepper press report four unpublished edits.
+const dirtyCount = () => {
+  const a = weekOf(state.planKey), b = (state.base[state.planKey] || {}).week || {};
+  let n = 0;
+  for (const d of DAYS) {
+    const x = new Map(a[d] || []), y = new Map(b[d] || []);
+    for (const [ex, s] of x) if (!y.has(ex) || y.get(ex) !== s) n++;
+    for (const ex of y.keys()) if (!x.has(ex)) n++;
+  }
+  return n;
+};
+
+function renderPlan() {
+  const P = plansOf();
+  const week = P.week;
+  const dayLifts = week[state.day] || [];
+  const live = state.planKey === state.sessionPlanKey && state.day === weekdayOf(today());
+  const gNow = groupTotals(week), gBase = groupTotals((state.base[state.planKey] || { week: {} }).week);
+
+  const strip = DAYS.map((d) => {
+    const n = sum((week[d] || []).map((x) => x[1]));
+    return `<button class="day" data-act="day" data-v="${d}" aria-pressed="${state.day === d}">
+      <span class="k">${DAY_LABEL[d]}</span><span class="n">${n || "—"}</span></button>`;
+  }).join("");
+
+  const armed = (i) => state.armedDrop === `${state.day}:${i}`;
+  const rows = dayLifts.map(([ex, s], i) => {
+    const prov = !EXERCISES[ex];
+    const needs = prov && (state.custom[ex] || {}).increment == null;
+    return `<div class="planrow">
+      <span class="mid"><span class="nm">${esc(disp(ex))}${prov ? ` <span class="tag">${needs ? "needs setup" : "new"}</span>` : ""}</span>
+        <span class="sub${live ? " live" : ""}">${esc(disp(primeOf(ex) || "custom"))}${live ? " · drives today" : ""}</span></span>
+      <button class="step" data-act="sets" data-i="${i}" data-d="-1" aria-label="one set fewer"><span>−</span></button>
+      <span class="v">${s}</span>
+      <button class="step" data-act="sets" data-i="${i}" data-d="1" aria-label="one set more"><span>+</span></button>
+      <button class="step drop${armed(i) ? " armed" : ""}" data-act="drop" data-i="${i}"
+        aria-label="${armed(i) ? "confirm removing" : "remove"} ${esc(disp(ex))}"><span>${armed(i) ? "✓" : "✕"}</span></button>
+    </div>`;
+  }).join("");
+
+  const cov = GROUPS.map((g) => {
+    const v = gNow[g], b = gBase[g], st = covStatus(v);
+    return { st, rank: COV[st].rank, v, html: `<div class="covrow">
+      <span class="dot d9 ${st}"></span><span class="nm">${g}</span>
+      <span class="was">${v !== b ? `was ${b}` : ""}</span>
+      <span class="num">${v}</span><span class="st">${COV[st].label}</span></div>` };
+  }).sort((a, b) => a.rank - b.rank || a.v - b.v).map((x) => x.html).join("");
+  const cnt = (s) => GROUPS.filter((g) => covStatus(gNow[g]) === s).length;
+  const covSummary = [["missed", "missed"], ["minimum", "minimum"], ["high", "high"]]
+    .map(([s, l]) => (cnt(s) ? `${cnt(s)} ${l}` : "")).filter(Boolean).join(" · ") || "all optimal";
+  const dirty = dirtyCount();
+
+  $("p-Plan").innerHTML = `
+    <div class="screenhead">
+      <div>
+        <div class="kicker">Editing plan</div>
+        <button class="planname" data-act="open-switch">${esc(P.name)} <span class="cv">⌄</span></button>
+      </div>
+      <div class="right"><div class="count">${weekSets(week)}</div><div class="caption">sets / week</div></div>
+    </div>
+
+    <div class="daystrip">${strip}</div>
+
+    <div class="screenhead" style="align-items:center">
+      <h1 style="font-size:16px">${DAY_LABEL[state.day]}${dayLifts.length ? "" : " · rest"}</h1>
+      <span class="meta">${plural(sum(dayLifts.map((x) => x[1])), "set")}</span>
+    </div>
+
+    ${rows || `<div class="empty">Nothing on ${DAY_LABEL[state.day]}. Add a lift below.</div>`}
+    <button class="btn ghost" data-act="open-lib">Search the library to add a lift</button>
+
+    <div class="coverage">
+      <div class="cardhead"><span class="label">Muscle coverage</span><span class="meta">${esc(covSummary)}</span></div>
+      <div class="legend">
+        <span><i class="dot missed"></i>0–3</span><span><i class="dot minimum"></i>4–9</span>
+        <span><i class="dot optimal"></i>10–20</span><span><i class="dot high"></i>20+</span>
+      </div>
+      ${cov}
+    </div>
+
+    <button class="btn primary" data-act="publish" ${dirty ? "" : "disabled"}>
+      ${dirty ? `Publish ${plural(dirty, "edit")}` : "Plan published"}</button>
+    ${dirty ? `<button class="btn" data-act="undo-plan">Undo</button>` : ""}
+    <button class="btn ghost" data-act="export">Export routine.yaml</button>
+    <pre id="yamlout" class="mono" hidden style="white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--color-neutral-400);background:var(--color-surface);padding:12px;border-radius:8px;max-height:280px;overflow:auto"></pre>
+
+    <p class="foot">The plan's set counts are the session's targets: change one here and
+      Session asks for it. Session's reorder and "+1 set" never change the plan.
+      Coverage rates planned hard sets a week per prime mover. Build ${esc(BUILD)}.</p>`;
+}
+
+/* ------------------------------------------------------------------- 7 History */
+
+function historySessions() {
+  const per = {};
+  for (const s of allSets()) {
+    const d = (per[s.date] = per[s.date] || { date: s.date, sets: 0, load: 0, lifts: {} });
+    d.sets++; d.load += s.load * s.reps;
+    (d.lifts[s.ex] = d.lifts[s.ex] || []).push(`${s.w} × ${s.reps}`);
+  }
+  return Object.values(per).sort((a, b) => (a.date < b.date ? 1 : -1));
+}
+
+function renderHistory() {
+  const all = historySessions();
+  const totalT = sum(all.map((s) => s.load)) / 1000;
+  $("p-History").innerHTML = `
+    <div class="screenhead">
+      <div><div class="kicker">All sessions</div><h1>${all.length} logged</h1></div>
+      <div class="right"><div class="count">${totalT.toFixed(1)}<span>t</span></div><div class="caption">total load</div></div>
+    </div>
+    ${all.length ? all.slice(0, 60).map((s) => {
+      const open = state.openSession === s.date;
+      return `<div class="sessrow">
+        <button class="sesshead" data-act="sess" data-v="${s.date}" aria-expanded="${open}">
+          <span class="d">${esc(fmtDate(s.date))}</span>
+          <span class="l">${esc(Object.keys(s.lifts).map(disp).join(" · "))}</span>
+          <span class="m">${s.sets} · ${(s.load / 1000).toFixed(1)}t</span>
+          <span class="c">›</span></button>
+        ${open ? `<div class="sessbody">${Object.entries(s.lifts).map(([ex, v]) =>
+          `<div class="r"><span class="n">${esc(disp(ex))}</span><span class="s mono">${esc(v.join("  "))}</span></div>`).join("")}</div>` : ""}
+      </div>`;
+    }).join("") : `<div class="empty"><b>No sessions yet.</b>
+      Finish a session on the Session tab and it appears here immediately.</div>`}
+    <p class="foot">Tonnage is load × reps, bodyweight lifts at ${BW_KG} kg. Cardio is
+      never counted here.</p>`;
+}
+
+/* ------------------------------------------------------------------- overlays */
+
+function renderOverlay() {
+  const o = $("overlay");
+  if (state.summaryOn) return void (o.innerHTML = summaryHtml());
+  if (state.lift) return void (o.innerHTML = liftHtml());
+  if (state.sheet) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${sheetHtml()}`);
+  if (state.switchOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${switchHtml()}`);
+  if (state.libOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${libHtml()}`);
+  o.innerHTML = "";
+}
+
+function sheetHtml() {
+  const ex = state.sheet, L = ensureLive();
+  const lift = sessionLifts().find((l) => l.ex === ex) || { sets: 3, top: null };
+  const done = L.logged[ex] || [];
+  const lib = libOf(ex);
+  const needs = !lib || lib.increment == null;
+  return `<div class="sheet" role="dialog" aria-modal="true">
+    <span class="handle"></span>
+    <div class="sheethead">
+      <div><h2>${esc(disp(ex))}</h2>
+        <div class="sub">${esc(disp(primeOf(ex) || "custom"))} · target ${plural(lift.sets, "set")} · last ${lift.top ? esc(lift.top) : "—"}</div></div>
+      <button class="closebtn" data-act="close-ov">Close</button>
+    </div>
+    ${needs ? `<div class="banner"><span class="tag">needs setup</span><div>
+      <b>No increment for this lift.</b> Loads are never guessed - set its increment and
+      rep range in <code>exercises.yaml</code> before logging it.</div></div>` : `
+    <div class="grid2">
+      <div class="stepper"><span class="label">Weight · kg</span><div class="row">
+        <button class="step" data-act="w" data-d="-2.5" aria-label="less"><span>−</span></button>
+        <input class="val mono" id="s-w" inputmode="decimal" value="${state.w}">
+        <button class="step" data-act="w" data-d="2.5" aria-label="more"><span>+</span></button></div></div>
+      <div class="stepper"><span class="label">Reps</span><div class="row">
+        <button class="step" data-act="r" data-d="-1" aria-label="fewer"><span>−</span></button>
+        <input class="val mono" id="s-r" inputmode="numeric" value="${state.r}">
+        <button class="step" data-act="r" data-d="1" aria-label="more"><span>+</span></button></div></div>
+    </div>
+    <p class="meta" style="margin:-4px 0 0">Steppers move 2.5 kg and 1 rep. Tap a number to type it.</p>`}
+    ${done.length ? `<div class="setlist">${done.map((v, i) =>
+      `<div class="r"><span class="k">set ${i + 1}</span><span class="v">${v.w} × ${v.r}</span></div>`).join("")}</div>` : ""}
+    <div style="display:flex;gap:9px">
+      <button class="btn primary" data-act="log-set" ${needs ? "disabled" : ""}>Log set ${done.length + 1} · ${state.w} × ${state.r}</button>
+      <button class="btn sm" data-act="extra-set" style="flex:none">+1 set</button>
+    </div>
   </div>`;
 }
 
-// Today, Trends and the Plan tab all read the SAME state - effectivePlan(), the set
-// overrides, the order - so any of them rendered at a different moment from the others is
-// showing a stale snapshot of it, and the two tabs then disagree about a plan that has
-// only one value. That is not hypothetical: it is how Today and Plan came to disagree
-// about a set count once already, and how they came to disagree about the exercise order
-// after that. So there is one entry point, every mutation goes through it, and no
-// renderer calls another.
-function renderAll() { pendingRender = false; renderToday(); renderTrends(); renderPlan(); }
-
-// The plan switcher. One chip per weekly plan, the selected one pressed. Switching
-// changes what Today prescribes and what the Plan tab edits, and nothing else: the set
-// counts and the order follow the plan they were set on, and every trend keeps reading
-// log.csv, which does not know plans exist.
-function renderPlanPicker() {
-  const el = $("planpicker");
-  if (!el) return;
-  const ids = planIds();
-  el.innerHTML =
-    ids.map(id => {
-      const sets = DAYS.reduce((a, d) => a + effectivePlan(d, id).reduce((x, p) => x + p.sets, 0), 0);
-      const local = !PLANS[id];
-      return `<button class="planchip ${id === state.plan ? "on" : ""} ${local ? "local" : ""}"
-        data-plan="${id}" aria-pressed="${id === state.plan}">
-        <span class="pn">${planName(id)}</span>
-        <span class="ps">${sets} sets/wk${local ? " &middot; not exported" : ""}</span>
-      </button>`;
-    }).join("") +
-    `<button class="planchip add" data-role="newplan">+ new plan</button>`;
-
-  for (const b of el.querySelectorAll("[data-plan]"))
-    b.onclick = () => selectPlan(b.dataset.plan);
-  el.querySelector('[data-role="newplan"]').onclick = newPlan;
-
-  const ren = $("planrename");
-  if (ren) {
-    ren.value = planName(state.plan);
-    ren.onchange = () => {
-      const v = ren.value.trim();
-      if (!v || v === planName(state.plan)) { ren.value = planName(state.plan); return; }
-      state.planName[state.plan] = v;
-      saveRoutine(); renderAll();
-      planEcho(`<b>Renamed to ${v}.</b> Names live on this device until you Export.`);
-    };
-  }
-}
-
-function selectPlan(id) {
-  if (id === state.plan) return;
-  state.plan = id;
-  state.pick = null;
-  // No day changed, so nothing is stamped - stamping here would let merely LOOKING at
-  // another plan out-rank a real edit made elsewhere. The choice still has to reach the
-  // store, so it is persisted and flushed on its own.
-  persistPrefs(); state.orderDirty = true; flushQueue();
-  renderAll();
-  planEcho(`<b>${planName(id)} selected.</b> Today now prescribes from it. ` +
-    `Logged history is untouched - trends, index, bridge and stalls read log.csv and ` +
-    `do not know which plan produced a set.`);
-}
-
-// A new plan starts EMPTY, not as a copy. A duplicate of the block you are already
-// running is a second copy of the same week that then drifts; a blank one makes you say
-// what the block is for. Days keep their names so the week is still recognisable.
-function newPlan() {
-  const name = prompt("Name this plan (e.g. travel week, deload, free weights)");
-  if (!name || !name.trim()) return;
-  const id = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")
-    || `plan_${planIds().length + 1}`;
-  if (planIds().includes(id)) { planEcho(`<b>${id} already exists.</b>`); return; }
-  state.planName[id] = name.trim();
-  state.routineBy[id] = { name: name.trim(), week: blankWeek(), lifts: [] };
-  saveRoutine();
-  state.plan = id;
-  persistPrefs(); state.orderDirty = true; flushQueue();
-  renderAll();
-  planEcho(`<b>${name.trim()} created, empty.</b> Add its lifts below, then Export - ` +
-    `it lives on this device only until routine.yaml has it. A new plan also needs its ` +
-    `own volume bands: <code>python3 analyze.py bands --plan ${id}</code>.`);
-}
-
-function renderPlan() {
-  const r = routine();
-  const planned = DAYS.reduce((a, d) => a + effectivePlan(d).reduce((x, p) => x + p.sets, 0), 0);
-  $("plan-title").textContent = `${planned} sets / week`;
-  const sub = $("plan-sub");
-  if (sub) sub.textContent = planIds().length > 1 ? planName(state.plan) : "Weekly routine";
-  // Two different kinds of edit, and conflating them is what loses work. Order is
-  // stored and needs nothing further. Set counts and lift changes move a muscle's
-  // weekly volume, and the bands in config.yaml are DERIVED from that - so until they
-  // reach routine.yaml the bands are measuring against a plan that is not the one on
-  // screen. Say which is which, and how many.
-  const structural = countStructuralEdits();
-  $("plan-summary").innerHTML =
-    `<b>${scheduledLifts().length}</b>lifts · ${DAYS.length} days` +
-    (structural ? `<br><span style="color:var(--warn)">${structural} change${
-      structural === 1 ? "" : "s"} not exported</span>` : "");
-  renderPlanNote(structural);
-  // Shown so a stale page on a phone can be identified rather than argued about.
-  // Optional-by-construction: writing to a missing node here would throw and abandon
-  // the rest of renderPlan, taking #planweek - the actual plan - with it.
-  const buildEl = $("build");
-  if (buildEl) buildEl.textContent = `build ${BUILD}`;
-
-  const echo = $("plan-echo");
-  if (echo) echo.innerHTML = "";
-  renderPlanPicker();
-  $("exlist").innerHTML = Object.keys(LIB).sort()
-    .map(e => `<option value="${label(e)}">`).join("");
-
-  $("planweek").innerHTML = DAYS.map(d => {
-    const day = r.week[d];
-    const shown = effectivePlan(d);
-    const n = shown.reduce((a, p) => a + p.sets, 0);
-    // Rows are addressed by EXERCISE NAME, not by position: the displayed plan carries
-    // overridden copies and is reordered, so an index into it no longer points at the
-    // entry the handler has to change.
-    const rows = shown.map((p) => {
-      const prov = isProvisional(p.exercise), bad = !exReady(p.exercise);
-      // The handle is both a drag handle and a tap target, so it has three states: idle,
-      // holding this row, and "drop the held row here". Saying which is which in the
-      // glyph and the label is the whole of the tap-to-move affordance.
-      const held = state.pick && state.pick.day === d && state.pick.ex === p.exercise;
-      const dropTo = state.pick && state.pick.day === d && !held;
-      return `
-      <div class="dayrow ${bad ? "unset" : ""} ${held ? "picked" : ""}"
-           data-day="${d}" data-ex="${p.exercise}">
-        <button class="handle ${held ? "held" : ""} ${dropTo ? "drop" : ""}"
-          data-role="handle" aria-label="${held ? "cancel move"
-            : dropTo ? `move ${label(state.pick.ex)} here` : "reorder"}">${
-          dropTo ? "&#8677;" : "&#8942;&#8942;"}</button>
-        <input class="exin" data-role="ex" list="exlist" value="${label(p.exercise)}"
-               title="${label(p.exercise)}" autocomplete="off" autocapitalize="none"
-               spellcheck="false" aria-label="exercise name">
-        <div class="stepper">
-          <button data-role="dec" aria-label="fewer sets">&minus;</button>
-          <span class="n">${p.sets}</span>
-          <button data-role="inc" aria-label="more sets">+</button>
-        </div>
-        <button class="rm" data-role="rm" aria-label="remove">&times;</button>
-        ${prov ? `<button class="provtag ${bad ? "bad" : ""}" data-role="deftoggle">${
-          bad ? "needs setup - no increment or rep range" : "not in library"}</button>` : ""}
-        ${prov ? defPanel(p.exercise, bad) : ""}
-      </div>`;
-    }).join("");
-    const isViewed = d === todayKey();
-    return `<div class="day">
-      <div class="dayhead ${isViewed ? "today" : ""}">
-        <span class="dd">${d}</span><span class="dn">${day.name}</span>
-        ${isViewed ? `<span class="onnow">${dayIsHistory()
-            ? "on Today &middot; logged" : "on Today"}</span>` : ""}
-        <span class="ds">${n} sets</span></div>
-      ${rows}
-      <div class="addrow"><button data-role="add" data-day="${d}">+ add a lift</button></div>
+function switchHtml() {
+  const rows = Object.entries(state.plans).map(([pid, p]) => {
+    const g = groupTotals(p.week);
+    const mi = GROUPS.filter((x) => covStatus(g[x]) === "missed").length;
+    const meta = `${weekSets(p.week)} sets / wk · ${mi ? `${mi} missed` : "none missed"}${pid === state.sessionPlanKey ? " · drives today" : ""}`;
+    if (state.renaming === pid) {
+      return `<div class="card" style="gap:8px">
+        <input class="input" id="rename" value="${esc(state.draft)}" autocomplete="off" spellcheck="false">
+        ${state.renameError ? `<div class="err">${esc(state.renameError)}</div>` : ""}
+        <div style="display:flex;gap:8px">
+          <button class="btn primary sm" data-act="rename-save">Save</button>
+          <button class="btn sm" data-act="rename-cancel">Cancel</button></div></div>`;
+    }
+    return `<div style="display:flex;gap:7px;align-items:stretch">
+      <button class="planpick${pid === state.planKey ? " on" : ""}" data-act="pick-plan" data-v="${esc(pid)}" style="flex:1">
+        <span><span class="nm">${esc(p.name)}</span><span class="sub">${esc(meta)}</span></span></button>
+      <button class="btn sm" data-act="rename" data-v="${esc(pid)}" style="flex:none">Rename</button>
+      <button class="btn sm primary" data-act="train" data-v="${esc(pid)}" style="flex:none">Train</button>
     </div>`;
   }).join("");
-
-  for (const row of $("planweek").querySelectorAll(".dayrow")) {
-    const d = row.dataset.day, ex = row.dataset.ex;
-    const at = () => routine().week[d].plan.findIndex(x => x.exercise === ex);
-    const cur = () => effectivePlan(d).find(x => x.exercise === ex)?.sets ?? 1;
-    row.querySelector('[data-role="ex"]').onchange = (e) => {
-      const typed = e.target.value;
-      const was = ex;
-      if (!typed.trim()) { renderAll(); return; }          // blank is not an edit
-      let key = resolveExercise(typed);
-      let minted = false;
-      if (!key) {
-        // Free text the library does not know. Not an error and not a guess: it becomes
-        // a lift of this browser's own, inert until its increment and rep range are set.
-        key = createProvisional(typed, { source: "typed" });
-        minted = true;
-      }
-      if (!key || key === was) { renderAll(); return; }
-      ensureEditable(); state.routineBy[state.plan].week[d].plan[at()].exercise = key;
-      saveRoutine(); renderAll();
-      if (minted) showFeedback(
-        `<span class="l1">${label(key)} added to ${d}</span>\n` +
-        `<span class="l2">not in exercises.yaml - no rule for it yet</span>\n` +
-        `<span class="l3">set its increment and rep range in Plan, then Export</span>`);
-    };
-    const tag = row.querySelector('[data-role="deftoggle"]');
-    if (tag) tag.onclick = () => {
-      const d2 = row.querySelector('[data-role="def"]');
-      if (d2) d2.hidden = !d2.hidden;
-    };
-    const def = row.querySelector('[data-role="def"]');
-    if (def) wireDefPanel(def);
-    const setsTo = (n) => {
-      const next = clamp(n, 1, 8);
-      if (next === cur()) {
-        planEcho(
-          `<b>${label(ex)} is at ${cur()} set${cur() === 1 ? "" : "s"}.</b> ` +
-          (cur() >= 8 ? "8 is the most this app will plan for one lift."
-                      : "1 is the fewest - remove the lift instead."));
-        return;
-      }
-      setOverride(d, ex, next);
-      renderAll();
-      planEcho(
-        `<b>${d} ${label(ex)} &rarr; ${next} set${next === 1 ? "" : "s"}.</b> ` +
-        (d === todayKey()
-          ? (dayIsHistory()
-              ? `Today is showing ${state.date}, which is already logged - the new count ` +
-                `applies the next time this day comes round.`
-              : `Showing in Today now.`)
-          : `Today is showing <b>${todayKey()}</b>, so this will not change what is on ` +
-            `that tab until ${d} comes round.`));
-    };
-    row.querySelector('[data-role="inc"]').onclick = () => setsTo(cur() + 1);
-    row.querySelector('[data-role="dec"]').onclick = () => setsTo(cur() - 1);
-    row.querySelector('[data-role="rm"]').onclick = () => {
-      if (!confirm(`Remove ${label(ex)} from ${d}?`)) return;
-      ensureEditable(); state.routineBy[state.plan].week[d].plan.splice(at(), 1);
-      const sb = setsByPlan();
-      if (sb[d]) {                     // no entry left for the override to apply to
-        delete sb[d][ex];
-        if (!Object.keys(sb[d]).length) delete sb[d];
-        savePrefs([d]);
-      }
-      saveRoutine(); renderAll();
-    };
-    const handle = row.querySelector('[data-role="handle"]');
-    handle.addEventListener("pointerdown", (e) => startDrag(e, row, d));
-    // Last resort. If a browser never delivers the pointerdown at all, or delivers it
-    // and then neither a pointerup nor a touchend, the click still lands - so the
-    // tap-to-move path survives even a total pointer-event failure. Suppressed right
-    // after a gesture the pointer path already handled, so one tap is never two.
-    handle.addEventListener("click", () => {
-      if (Date.now() - gestureAt < 500) return;
-      pickToggle(d, ex);
-    });
-  }
-  for (const btn of $("planweek").querySelectorAll('[data-role="add"]')) {
-    btn.onclick = () => {
-      ensureEditable();
-      state.routineBy[state.plan].week[btn.dataset.day].plan.push(
-        { exercise: r.lifts?.[0] || Object.keys(LIB)[0], sets: 4 });
-      // the new row's combobox is where you type what it actually is
-      saveRoutine(); renderAll();
-    };
-  }
+  return `<div class="sheet" role="dialog" aria-modal="true">
+    <span class="handle"></span>
+    <div class="sheethead"><div><h2>Your plans</h2>
+      <div class="sub">the plan you train is separate from the one you edit</div></div>
+      <button class="closebtn" data-act="close-ov">Close</button></div>
+    ${rows}
+    <div style="display:flex;gap:8px">
+      <button class="btn ghost sm" data-act="new-plan" data-v="blank" style="flex:1">Start blank</button>
+      <button class="btn ghost sm" data-act="new-plan" data-v="copy" style="flex:1">Copy “${esc(plansOf().name)}”</button>
+    </div>
+  </div>`;
 }
 
-// This panel edits IN PLACE and never calls renderAll(). Re-rendering the plan on a
-// field change replaces the very input being typed into: on a phone that eats the
-// keystroke, the focus and the caret. So each edit writes state, saves, and touches
-// only the two things that can visibly change - the row's own flag, and Today.
-function wireDefPanel(def) {
-  const key = def.dataset.key;
-  const p = state.provisional[key];
-  if (!p) return;
-  const row = def.closest(".dayrow");
-
-  const refresh = () => {
-    const bad = !exReady(key);
-    row.classList.toggle("unset", bad);
-    const tag = row.querySelector('[data-role="deftoggle"]');
-    if (tag) {
-      tag.classList.toggle("bad", bad);
-      tag.textContent = bad ? "needs setup - no increment or rep range" : "not in library";
-    }
-    renderToday();   // the prescription and the set boxes hang on exactly this
-  };
-
-  for (const chip of def.querySelectorAll(".mchip")) {
-    chip.onclick = () => {
-      const m = chip.dataset.m;
-      p.muscles = p.muscles.includes(m) ? p.muscles.filter(x => x !== m) : [...p.muscles, m];
-      chip.classList.toggle("on", p.muscles.includes(m));
-      saveProvisional(); refresh();
-    };
+function libHtml() {
+  const q = state.query.trim().toLowerCase();
+  const inDay = new Set((weekOf(state.planKey)[state.day] || []).map((x) => x[0]));
+  const inPlans = {};
+  for (const [pid, p] of Object.entries(state.plans)) {
+    for (const d of DAYS) for (const [ex] of p.week[d] || []) (inPlans[ex] = inPlans[ex] || new Set()).add(p.name);
   }
-  const num = (f) => {
-    const v = parseFloat(String(def.querySelector(`[data-f="${f}"]`).value).replace(",", "."));
-    return Number.isFinite(v) && v > 0 ? v : null;
-  };
-  const write = () => {
-    p.increment = num("inc");
-    const floor = num("floor"), ceiling = num("ceiling");
-    p.rep_range = floor && ceiling && ceiling >= floor ? [floor, ceiling] : null;
-    p.bodyweight = def.querySelector('[data-f="bw"]').checked;
-    saveProvisional(); refresh();
-  };
-  // input, not change: change waits for blur, so the last field typed before pressing
-  // Export would not have been written yet.
-  for (const el of def.querySelectorAll('input[type="number"]')) el.oninput = write;
-  def.querySelector('[data-f="bw"]').onchange = write;
+  for (const ex of Object.keys(EXERCISES)) inPlans[ex] = inPlans[ex] || new Set();
+  for (const ex of Object.keys(state.custom)) inPlans[ex] = inPlans[ex] || new Set();
+  const counts = {};
+  for (const s of allSets()) counts[s.ex] = (counts[s.ex] || 0) + 1;
+  const lib = Object.keys(inPlans).sort();
+  const results = lib.filter((ex) => !inDay.has(ex) && (!q || disp(ex).includes(q)));
+  const exact = lib.some((ex) => disp(ex) === q);
+
+  return `<div class="sheet" role="dialog" aria-modal="true" style="max-height:82%">
+    <span class="handle"></span>
+    <div class="sheethead"><div><h2>Add a lift to ${DAY_LABEL[state.day]}</h2></div>
+      <button class="closebtn" data-act="close-ov">Close</button></div>
+    <input class="input" id="libq" placeholder="Search, or type a new lift's name" value="${esc(state.query)}" autocomplete="off" spellcheck="false">
+    ${results.length ? `<div class="label">In your plans · ${results.length}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">${results.slice(0, 60).map((ex) => `
+        <button class="planpick" data-act="add-lift" data-v="${esc(ex)}">
+          <span><span class="nm">${esc(disp(ex))}</span>
+            <span class="sub">${esc(disp(primeOf(ex) || "custom"))} · ${[...inPlans[ex]].join(" + ") || "library"} · ${counts[ex] || 0} sets logged</span></span>
+          <span class="mono" style="color:var(--color-accent-400);font-size:18px">+</span></button>`).join("")}</div>`
+      : q ? `<p class="meta">No lift in your library or plans matches.</p>` : ""}
+    ${q && !exact ? `<div class="card">
+      <span class="label">New lift</span>
+      <p class="body" style="margin:0">A lift the app invents is <b>provisional</b>: it can be
+        planned, but it cannot be prescribed for or logged until its prime mover, rep range and
+        increment are set. The increment is never guessed - read it off the machine.</p>
+      <div class="pills">${MUSCLE_PILLS.map((m) =>
+        `<button class="pill" data-act="new-muscle" data-v="${m}" aria-pressed="${state.newMuscle === m}">${esc(disp(m))}</button>`).join("")}</div>
+      <button class="btn primary" data-act="create-lift">Add “${esc(state.query.trim())}” as a new lift</button>
+    </div>` : ""}
+  </div>`;
 }
 
-// Pointer-based reorder - not the HTML5 drag-and-drop API, which has no real touch
-// support and this has to work with a thumb, mid-session. Rows in the SAME day only;
-// reordering across days is a different edit (move + remove) and out of scope here.
-const DRAG_SLOP = 8;          // px of travel before a touch counts as a drag, not a tap
-let gestureAt = 0;            // when the pointer path last handled a handle gesture
-let dragActive = false;       // a row is being dragged right now
-let pendingRender = false;    // remote state arrived while it was - render when it lands
+function summaryHtml() {
+  const S = state.lastSummary;
+  if (!S) {
+    return `<div class="full summary" role="dialog" aria-modal="true">
+      <div><div class="kicker">${fmtDate(today())} · nothing logged</div>
+        <h1 class="big">Nothing written.</h1></div>
+      <p class="body">Tap a lift on the Session tab to log a set, then finish again.</p>
+      <button class="btn primary" data-act="close-summary">Back</button></div>`;
+  }
+  const doneAll = S.sets, load = S.load, lifts = S.lifts;
+  const up = lifts.filter((l) => l.d > 0).length;
+  const held = lifts.find((l) => l.d === 0) || lifts[0];
+  const muscles = uniq(lifts.map((l) => groupOf(l.ex)).filter(Boolean));
+  const W = windowView(4);
+  const under = W.empty ? null : GROUPS.map((g) => ({ g, v: W.gSets[g] || 0 }))
+    .filter((x) => covStatus(x.v) === "missed" || covStatus(x.v) === "minimum")
+    .sort((a, b) => a.v - b.v)[0];
 
-// Writes the ORDER, never the routine: a reorder must not mark the plan as structurally
-// edited, because it changes no volume and needs no export - and making it structural is
-// what would get it thrown away on the next deploy. It echoes the result, and says
-// whether Today is showing that day, because "it did nothing" and "it changed a day you
-// are not looking at" are indistinguishable on screen otherwise.
-function commitOrder(day, fromIndex, toIndex) {
-  const names = effectivePlan(day).map(p => p.exercise);
-  if (fromIndex < 0 || fromIndex >= names.length) { renderAll(); return false; }
-  const to = clamp(toIndex, 0, names.length - 1);
-  if (to === fromIndex) { renderAll(); return false; }
-  const [moved] = names.splice(fromIndex, 1);
-  names.splice(to, 0, moved);
-  orderBy()[day] = names;
-  state.pick = null;
-  saveOrder([day]);
+  return `<div class="full summary" role="dialog" aria-modal="true">
+    <div><div class="kicker">${fmtDate(S.date)} · session complete</div>
+      <h1 class="big">${esc(muscles.slice(0, 2).join(" + ") || "Session")}, logged.</h1></div>
+    <div class="hgrid three">
+      <div class="kpi"><div class="k">Sets</div><div class="v">${doneAll}</div></div>
+      <div class="kpi"><div class="k">Load</div><div class="v">${(load / 1000).toFixed(1)}t</div></div>
+      <div class="kpi"><div class="k">Lifts up</div><div class="v accent">${up}</div></div>
+    </div>
+    <div class="sectionlabel">What moved</div>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      ${lifts.map((l) => `<div class="wm"><span class="n">${esc(disp(l.ex))}</span>
+        <span class="t">${esc(l.top)}</span>
+        <span class="d${l.d > 0 ? " up" : ""}">${l.d == null ? "new" : l.d > 0 ? `+${l.d}` : l.d < 0 ? String(l.d) : "held"}</span></div>`).join("")}
+    </div>
+    ${held ? `<div class="note"><div class="t">${esc(disp(held.ex))} ${held.d === 0 ? `held at ${esc(held.top)}` : `at ${esc(held.top)}`}</div>
+      <div class="b">${held.d === 0
+        ? "Same load as last session. Chase one more rep on the top set before adding weight."
+        : "First time this lift has a baseline - next session is measured against it."}</div></div>` : ""}
+    <div class="nextrow"><span class="tag">next</span>
+      <span class="t">${under ? `${cap(under.g)} is on ${plural(under.v, "hard set")} a week - the thinnest group in the last four weeks.`
+        : "Nothing under-dosed in the last four weeks. Run the plan."}</span></div>
+    <button class="btn primary" data-act="close-summary">Done</button>
+  </div>`;
+}
+
+function liftHtml() {
+  const ex = state.lift;
+  const sets = allSets().filter((s) => s.ex === ex);
+  if (!sets.length) return "";
+  const per = bySession(sets)[ex];
+  const series = per.series, vals = series.map((d) => d.best);
+  const mn = Math.min(...vals), mx = Math.max(...vals), sp = mx - mn || 1;
+  const pts = vals.length > 1
+    ? vals.map((v, i) => `${((i / (vals.length - 1)) * 320).toFixed(1)},${(90 - 4 - ((v - mn) / sp) * 82).toFixed(1)}`).join(" ") : "";
+  const W = windowView(parseInt(state.win, 10));
+  const row = W.lifts.find((l) => l.ex === ex) || {};
+  const call = {
+    progressing: "Keep adding load at the current rate.",
+    maintaining: "Holding. Add a set before adding weight.",
+    plateauing: "Flat across the last sessions — chase reps at this load, then step up.",
+    regressing: "Falling. Check recovery and volume before pushing load again.",
+  }[row.status] || "Not enough sessions in this window to call it.";
+  const best = sets.reduce((a, b) => (b.e1 > a.e1 ? b : a), sets[0]);
+  const p = prescribe(ex);
+
+  return `<div class="full" role="dialog" aria-modal="true">
+    <div class="sheethead">
+      <div><div class="kicker">${esc(disp(primeOf(ex) || ""))}</div><h1 class="big">${esc(disp(ex))}</h1></div>
+      <button class="closebtn" data-act="close-ov">Close</button></div>
+    <section class="card">
+      <div class="cardhead"><span class="label">Estimated 1RM</span><span class="meta">${plural(series.length, "session")}</span></div>
+      ${pts ? `<svg class="chart" viewBox="0 0 320 90" aria-hidden="true">
+        <polyline points="${pts}" fill="none" stroke="var(--color-accent)" stroke-width="1.5" stroke-linejoin="round"/></svg>` : `<p class="meta">One session so far.</p>`}
+      <div class="cardhead"><span class="meta">${esc(fmtDate(series[0].date))} · ${vals[0].toFixed(1)}</span>
+        <span class="meta">${esc(fmtDate(series[series.length - 1].date))} · ${vals[vals.length - 1].toFixed(1)}</span></div>
+    </section>
+    <div class="hgrid three">
+      <div class="kpi"><div class="k">Best e1RM</div><div class="v">${best.e1.toFixed(1)}</div></div>
+      <div class="kpi"><div class="k">Top set</div><div class="v" style="font-size:17px">${best.w}×${best.reps}</div></div>
+      <div class="kpi"><div class="k">Sets</div><div class="v">${sets.length}</div></div>
+    </div>
+    <div class="nextrow"><span class="tag${row.status === "progressing" ? " on" : ""}">${esc(row.status || "no call")}</span>
+      <span class="t">${esc(call)}</span></div>
+    <div class="nextrow"><span class="tag">next</span>
+      <span class="t">The rule prescribes <b>${p.w} kg × ${p.r}</b>${p.why ? ` (${p.why})` : ""}.</span></div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------- actions */
+
+function setState(patch, opts = {}) {
+  Object.assign(state, patch);
+  if (opts.persist !== false) persist();
   renderAll();
-  planEcho(
-    `<b>${day} ${label(moved)} &rarr; #${to + 1} of ${names.length}.</b> ` +
-    (day === todayKey()
-      ? `Showing in Today now.`
-      : `Today is showing <b>${todayKey()}</b>, so this changes that tab when ` +
-        `${day} comes round.`));
-  return true;
 }
 
-// Tap-to-move: a reorder path with no gesture in it at all. A drag asks the browser to
-// deliver a stream of moves for a touch it is equally free to call a scroll, and when it
-// does not, the drop reverts - which is exactly how this was reported ("it jumps back").
-// A tap cannot fail that way, so the handle does both: tap to pick a row up, tap another
-// row's handle to drop it there, tap the same one again to cancel.
-function pickToggle(day, ex) {
-  const cur = state.pick;
-  if (cur && cur.day === day && cur.ex === ex) {
-    state.pick = null; renderAll(); return;
-  }
-  if (cur && cur.day === day) {                 // second tap in the same day: the drop
-    const names = effectivePlan(day).map(p => p.exercise);
-    const from = names.indexOf(cur.ex), to = names.indexOf(ex);
-    state.pick = null;
-    if (from < 0 || to < 0) { renderAll(); return; }
-    commitOrder(day, from, to);
-    return;
-  }
-  state.pick = { day, ex };                     // a pick in another day replaces it
-  renderAll();
-  planEcho(`<b>${label(ex)} picked up (${day}).</b> Tap another row's handle to drop it ` +
-           `there, or tap this row's handle again to cancel.`);
+function editPlan(fn) {
+  const plans = clone(state.plans);
+  fn(plans[state.planKey].week);
+  setState({ plans });
 }
 
-function startDrag(e, row, day) {
-  // Pointer capture is deliberately NOT used and the move/up listeners go on the window,
-  // not the row. With capture, a browser that retargets or simply stops delivering
-  // pointer events part way through a touch never gets a pointermove to the row, so the
-  // drop position stays where it started and the row snaps back with no error anywhere.
-  // Window listeners see whatever the browser does deliver, and a touchmove fallback
-  // covers the case where it delivers touch events but not pointer ones.
-  const list = [...row.parentElement.querySelectorAll(".dayrow")];
-  const fromIndex = list.indexOf(row);
-  const h = row.getBoundingClientRect().height;
-  const startY = e.clientY;
-  let current = fromIndex, dragging = false;
-
-  // Scrolling is suspended outright for the duration rather than trusted to
-  // touch-action, so the browser has no reason left to claim the gesture mid-drag.
-  dragActive = true;
-  const root = document.documentElement;
-  const ta = root.style.touchAction, us = root.style.userSelect;
-  root.style.touchAction = "none"; root.style.userSelect = "none";
-
-  const track = (y) => {
-    const dy = y - startY;
-    if (!dragging && Math.abs(dy) <= DRAG_SLOP) return;
-    dragging = true;
-    row.classList.add("dragging");
-    row.style.transform = `translateY(${dy}px)`;
-    const slot = clamp(Math.round(fromIndex + dy / h), 0, list.length - 1);
-    if (slot === current) return;
-    current = slot;
-    list.forEach((el, idx) => {
-      if (el === row) return;
-      const shift = (current > fromIndex && idx > fromIndex && idx <= current) ? -1
-        : (current < fromIndex && idx < fromIndex && idx >= current) ? 1 : 0;
-      el.style.transform = shift ? `translateY(${shift * h}px)` : "";
-    });
+// Finishing WRITES, so it has to be idempotent: the sets move out of the live session
+// and into `sessions` in the same breath, and the summary renders from its own snapshot.
+// Pressing Finish twice must not log the session twice.
+function finish() {
+  const L = ensureLive();
+  const entries = Object.entries(L.logged).filter(([, v]) => v.length);
+  if (!entries.length) { setState({ summaryOn: true, lastSummary: null }); return; }
+  const sessions = { ...state.sessions };
+  const prior = sessions[L.date] ? sessions[L.date].lifts : {};
+  const lifts = { ...prior };
+  for (const [ex, v] of entries) lifts[ex] = (lifts[ex] || []).concat(v.map((x) => ({ w: x.w, r: x.r, rir: null })));
+  // The baseline has to be read BEFORE the session joins the log, or every lift
+  // measures itself against the sets just logged and every delta reads "held".
+  const prev = bySession(allSets().filter((s) => s.date < L.date));
+  const snap = {
+    date: L.date,
+    lifts: entries.map(([ex, v]) => {
+      const best = v.reduce((a, b) => (b.w * b.r > a.w * a.r ? b : a), v[0]);
+      const p = prev[ex];
+      const prevW = p ? p.series[p.series.length - 1].top.w : null;
+      return { ex, top: `${best.w} × ${best.r}`, d: prevW == null ? null : best.w - prevW };
+    }),
+    sets: sum(entries.map(([, v]) => v.length)),
+    load: sum(entries.map(([ex, v]) => sum(v.map((x) => (isBW(ex) ? BW_KG + x.w : x.w) * x.r)))),
   };
-  const onPointerMove = (ev) => track(ev.clientY);
-  const onTouchMove = (ev) => {
-    if (!ev.touches.length) return;
-    if (ev.cancelable) ev.preventDefault();     // non-passive: the page stays put
-    track(ev.touches[0].clientY);
-  };
-  let finished = false;
-  const finish = () => {
-    if (finished) return;
-    finished = true;
-    gestureAt = Date.now();
-    dragActive = false;
-    detach();
-    root.style.touchAction = ta; root.style.userSelect = us;
-    // A cancel is a drop, not an abort. Scrolling is already suspended, so the cancels
-    // left are the browser losing the pointer - and discarding the move there is the
-    // snap-back itself. A gesture that never passed the slop is a tap: hand it to
-    // pickToggle rather than swallowing it.
-    if (dragging) {
-      if (current !== fromIndex) commitOrder(day, fromIndex, current); else renderAll();
-    } else {
-      pickToggle(day, row.dataset.ex);
-    }
-  };
-  const tOpts = { passive: false, capture: true };
-  function detach() {
-    window.removeEventListener("pointermove", onPointerMove, true);
-    window.removeEventListener("pointerup", finish, true);
-    window.removeEventListener("pointercancel", finish, true);
-    window.removeEventListener("touchmove", onTouchMove, tOpts);
-    window.removeEventListener("touchend", finish, true);
-    window.removeEventListener("touchcancel", finish, true);
-  }
-  window.addEventListener("pointermove", onPointerMove, true);
-  window.addEventListener("pointerup", finish, true);
-  window.addEventListener("pointercancel", finish, true);
-  window.addEventListener("touchmove", onTouchMove, tOpts);
-  window.addEventListener("touchend", finish, true);
-  window.addEventListener("touchcancel", finish, true);
+  state.sessions = sessions;
+  sessions[L.date] = { date: L.date, plan: L.plan, lifts, at: new Date().toISOString() };
+  state.live = { date: today(), plan: state.sessionPlanKey, logged: {}, extra: {}, order: null };
+  setState({ summaryOn: true, lastSummary: snap, sheet: null, reorder: false });
 }
 
-// How far the local plan has drifted from the file, counted in the units that matter:
-// a lift added or removed, and a set count changed.
-function countStructuralEdits() {
-  let n = 0;
-  // Against the file's copy of the SELECTED plan. A plan this device invented has no
-  // file copy at all, so every one of its lifts is drift - which is true: none of it has
-  // reached routine.yaml yet.
-  const fw = (PLANS[state.plan] || {}).week;
-  for (const d of DAYS) {
-    const file = new Map((fw?.[d]?.plan || []).map(p => [p.exercise, p.sets]));
-    const now = new Map(effectivePlan(d).map(p => [p.exercise, p.sets]));
-    for (const [ex, sets] of now) n += !file.has(ex) ? 1 : (file.get(ex) !== sets ? 1 : 0);
-    for (const ex of file.keys()) if (!now.has(ex)) n += 1;
-  }
+function closeSummary() {
+  setState({ summaryOn: false, lastSummary: null, tab: "Progress" });
+}
+
+function uniqueName(base) {
+  let n = base, i = 2;
+  const names = new Set(Object.values(state.plans).map((p) => p.name));
+  while (names.has(n)) n = `${base} ${i++}`;
   return n;
 }
 
-const planEcho = (html) => { const el = $("plan-echo"); if (el) el.innerHTML = html; };
-
-function renderPlanNote(structural) {
-  const el = $("plannote");
-  if (!el) return;
-  const bits = [];
-  if (state.dropped)
-    bits.push(`<b>A newer plan was published.</b> Set-count and lift edits made against ` +
-      `the old one could not be carried over and were dropped; your <b>order is kept</b>. ` +
-      `Redo them below if you still want them.`);
-  if (structural)
-    bits.push(`<b>${structural} change${structural === 1 ? "" : "s"} live only in this ` +
-      `browser.</b> Set counts and lift changes move a muscle's weekly volume, and the ` +
-      `bands are derived from <code>routine.yaml</code> - until you Export and paste ` +
-      `them in, the bands are measuring a different plan. A new publish will drop them.`);
-  if (!bits.length && Object.keys(state.order).length)
-    bits.push(state.sync === "off"
-      ? `Your exercise order is saved in this browser. It survives a new publish; set ` +
-        `counts and lift changes still need Export.`
-      : `Your exercise order is stored and follows you across devices. It survives a new ` +
-        `publish - only set counts and lift changes need Export.`);
-  el.hidden = !bits.length;
-  el.className = "scannote" + (state.dropped ? " bad" : "");
-  el.innerHTML = bits.join("<br><br>");
+function newPlan(copy) {
+  const pid = `local-${Date.now().toString(36)}`;
+  const week = copy ? clone(weekOf(state.planKey)) : Object.fromEntries(DAYS.map((d) => [d, []]));
+  const name = uniqueName(copy ? `${plansOf().name} copy` : "new plan");
+  const plans = { ...state.plans, [pid]: { name, week } };
+  const base = { ...state.base, [pid]: { name, week: clone(week) } };
+  setState({ plans, base, planKey: pid, renaming: pid, draft: name, renameError: "", switchOn: true });
 }
 
-// Derived, never carried: analyze.py requires lifts and the schedule to agree exactly,
-// and the stored `lifts` list goes stale the moment a lift is added in the browser.
-const scheduledLifts = (pid = state.plan) =>
-  [...new Set(DAYS.flatMap(d => effectivePlan(d, pid).map(p => p.exercise)))].sort();
-const allScheduledLifts = () =>
-  [...new Set(planIds().flatMap(p => scheduledLifts(p)))].sort();
+function saveRename() {
+  const pid = state.renaming, n = (state.draft || "").trim();
+  if (!pid) return;
+  if (!n) return setState({ renameError: "Give the plan a name." }, { persist: false });
+  const clash = Object.entries(state.plans).some(([k, p]) => k !== pid && p.name === n);
+  if (clash) return setState({ renameError: `A plan called “${n}” already exists.` }, { persist: false });
+  const plans = clone(state.plans); plans[pid].name = n;
+  setState({ plans, renaming: null, renameError: "" });
+}
+
+function logSet() {
+  const ex = state.sheet, L = ensureLive();
+  const lib = libOf(ex);
+  if (!lib || lib.increment == null) return;
+  const logged = { ...L.logged };
+  logged[ex] = (logged[ex] || []).concat([{ w: state.w, r: state.r }]);
+  L.logged = logged;
+  const lift = sessionLifts().find((l) => l.ex === ex) || { sets: 3 };
+  // The sheet auto-dismisses once the lift's target set count is reached; otherwise it
+  // stays open on the same load for the next set.
+  setState(logged[ex].length >= lift.sets ? { sheet: null } : {});
+}
+
+function openSheet(ex) {
+  const p = prescribe(ex);
+  const L = ensureLive();
+  const already = (L.logged[ex] || []);
+  const seed = already.length ? already[already.length - 1] : { w: p.w, r: p.r };
+  setState({ sheet: ex, w: seed.w, r: seed.r }, { persist: false });
+}
+
+function logCardio() {
+  const min = parseFloat(state.cMin) || 0, km = parseFloat(state.cKm) || 0;
+  if (!(min > 0)) return;
+  const t = today();
+  const rec = {
+    id: Date.now(), date: state.cWhen === "visit" ? t : (state.cDate || t),
+    type: state.cType, min, km: km > 0 ? +km.toFixed(2) : null, lift: state.cWhen === "visit",
+  };
+  setState({ cLast: rec, cardio: [rec, ...state.cardio].sort((a, b) => (a.date < b.date ? 1 : -1)) });
+}
 
 function exportYaml() {
-  const scheduled = allScheduledLifts();
-  const out = $("yamlout");
-  out.hidden = false;
-
-  // Refuse rather than emit a routine that cannot load. A failed export costs a minute;
-  // a plausible-looking increment pasted into exercises.yaml is wrong for months.
-  const unset = scheduled.filter(e => !exReady(e));
-  if (unset.length) {
-    out.textContent =
-      `# NOT EXPORTED - ${unset.length} lift(s) have no increment or rep range:\n` +
-      unset.map(e => `#   ${label(e)}`).join("\n") +
-      "\n#\n# Open the row and fill them in. analyze.py would reject this routine, and\n" +
-      "# a guessed increment is worse than a failed export.";
-    return;
-  }
-
-  const lines = [];
-  const prov = scheduled.filter(isProvisional);
-  if (prov.length) {
-    // Every non-YAML line carries the ===== marker, so selecting the block and
-    // stripping "# " cannot drag a sentence of prose into exercises.yaml with it.
-    lines.push("# ===== exercises.yaml - add these FIRST, uncommented. routine.yaml",
-               "# ===== below names them and will not load until they exist.");
-    for (const e of prov) {
-      const x = state.provisional[e];
-      lines.push(`# ${e}:`);
-      lines.push(`#   aliases: [${(x.aliases || []).map(a => JSON.stringify(a)).join(", ")}]`);
-      lines.push(`#   muscles: [${x.muscles.join(", ")}]`);
-      lines.push(`#   increment: ${x.increment}`);
-      lines.push(`#   rep_range: [${x.rep_range[0]}, ${x.rep_range[1]}]`);
-      if (x.bodyweight) lines.push("#   bodyweight: true");
-      if (x.note) lines.push(`#   # read off the machine: ${x.note}`);
-    }
-    lines.push("# ===== end exercises.yaml", "");
-  }
-  // Every plan, not just the one on screen, and the schedule that says which is active
-  // from when. `lifts` is omitted per plan on purpose: analyze.py derives it from what
-  // the week actually schedules, and a carried copy is the thing that goes stale.
-  lines.push("plans:");
-  for (const pid of planIds()) {
-    lines.push(`  ${pid}:`, `    name: ${JSON.stringify(planName(pid))}`, "    week:");
+  const out = ["plans:"];
+  for (const [pid, p] of Object.entries(state.plans)) {
+    const lifts = uniq(DAYS.flatMap((d) => (p.week[d] || []).map((x) => x[0]))).sort();
+    out.push(`  ${pid}:`, `    name: ${p.name}`, "    lifts:");
+    for (const ex of lifts) out.push(`      - ${ex}`);
+    out.push("    week:");
     for (const d of DAYS) {
-      const rows = effectivePlan(d, pid);
-      lines.push(`      ${d}:`,
-                 `        name: ${JSON.stringify(routineOf(pid).week[d].name)}`,
-                 // A rest day has to say so explicitly: a bare `plan:` reads back as
-                 // null, not as an empty list, and the loader would reject the file.
-                 rows.length ? "        plan:" : "        plan: []");
-      for (const p of rows)
-        lines.push(`          - {exercise: ${p.exercise}, sets: ${p.sets}}`);
+      const rows = p.week[d] || [];
+      out.push(`      ${d}:`);
+      out.push(`        name: ${(PLANS[pid] || { week: {} }).week?.[d]?.name || d}`);
+      if (!rows.length) { out.push("        plan: []"); continue; }
+      out.push("        plan:");
+      for (const [ex, s] of rows) out.push(`          - exercise: ${ex}`, `            sets: ${s}`);
     }
   }
-  lines.push("", "schedule:");
-  const known = new Map(SCHEDULE.map(e => [e.plan, e.from]));
-  for (const e of SCHEDULE) lines.push(`  - {plan: ${e.plan}, from: ${e.from}}`);
-  // The selected plan is what this device is training. If the file's schedule does not
-  // already end on it, say so with today's date rather than leaving analyze.py measuring
-  // adherence against a block that was swapped out on the phone weeks ago.
-  if (SCHEDULE[SCHEDULE.length - 1]?.plan !== state.plan)
-    lines.push(`  - {plan: ${state.plan}, from: ${isoDate(new Date())}}` +
-               (known.has(state.plan) ? "" : "    # new plan, first activated here"));
-  lines.push("", "# Bands are DERIVED from the plan they measure. For a NEW plan run",
-             "#   python3 analyze.py bands --plan <id>",
-             "# and paste the block under volume_targets_by_plan in config.yaml -",
-             "# otherwise it is judged against another plan's weekly volume.");
-  out.textContent = lines.join("\n");
+  out.push("schedule:", `  - plan: ${state.sessionPlanKey}`, `    from: ${today()}`);
+  const provisional = Object.keys(state.custom);
+  const head = provisional.length
+    ? `# Provisional lifts still need an exercises.yaml entry before this loads:\n` +
+      provisional.map((n) => `#   ${n}: {muscles: [${(state.custom[n] || {}).muscle}], increment: ?, rep_range: [8, 12]}\n`).join("") +
+      "# The increment is never guessed. Read it off the machine.\n\n"
+    : "";
+  const el = $("yamlout");
+  el.textContent = head + out.join("\n") +
+    "\n\n# Paste into routine.yaml, then: python3 analyze.py bands --plan <id>\n";
+  el.hidden = false;
 }
 
-// ---------------------------------------------------------------- sync
-// Where a logged session actually lives.
-//
-// localStorage is the WRITE-AHEAD BUFFER, never the store of record: it is one browser
-// on one device, and a cleared cache takes a year of training with it. The store is the
-// artifact's own database, reachable only inside claude.ai - so every write lands
-// locally first and is flushed when the store is there. A gym basement with no signal is
-// the normal case, not the edge case, and Submit must never block on the network.
-//
-// One document per SESSION, not per set: the database caps at 5,000 documents, and
-// 7 sessions a week is ~364 a year - over a decade of headroom. A document per set would
-// burn that cap in eleven weeks.
-//
-// The page reads a bounded WINDOW, not the whole history. Queries scan the collection,
-// so pulling three years of sessions on every load would eventually cost a
-// resource_exhausted. The window only has to cover what the browser computes for itself:
-// the "last week" reference row and the 7/14-day volume bands. Everything longer-range
-// is analyze.py's job, from log.csv, and no amount of local history changes that.
-const STORE_QUEUE = "strengthlog.queue.v1";
-const SYNC_WINDOW = 60;      // days of history to pull; the widest local window is 14
+/* --------------------------------------------------------------- event wiring */
 
-let DB = null;
-let flushing = false;
-
-const dbErr = (e) => (e && typeof e.code === "string") ? e.code : "unavailable";
-
-function saveQueue() {
-  try { localStorage.setItem(STORE_QUEUE, JSON.stringify(state.queue)); }
-  catch { /* private mode */ }
-}
-function loadQueue() {
-  try {
-    const d = JSON.parse(localStorage.getItem(STORE_QUEUE) || "[]");
-    if (Array.isArray(d)) state.queue = d.filter(x => typeof x === "string");
-  } catch { /* ignore */ }
-}
-const queueDate = (date) => {
-  if (!state.queue.includes(date)) state.queue.push(date);
-  saveQueue();
-};
-
-// Rows this device has not flushed win over the copy in the store: they are newer by
-// construction, and a session edited offline must not be overwritten by its own
-// pre-edit version on the next pull.
-const remoteRows = () => {
-  const local = new Set(state.committed.map(r => r.date));
-  return state.remote.filter(r => !local.has(r.date));
-};
-
-function sessionDoc(date) {
-  const sets = state.committed
-    .filter(r => r.date === date)
-    .map(({ exercise, set_no, weight_kg, reps, rir }) =>
-      ({ exercise, set_no, weight_kg, reps, rir: rir ?? null }));
-  return { date, sets, updated_at: new Date().toISOString(), schema: 1 };
-}
-
-async function pullRemote() {
-  let changed = false;
-  if (!DB) return;
-  const since = isoDate(new Date(Date.now() - SYNC_WINDOW * 864e5));
-  try {
-    const snap = await DB.collection("sessions")
-      .where("date", ">=", since).orderBy("date", "desc").limit(200).get();
-    const rows = [];
-    for (const d of snap.docs) {
-      const body = d.data();
-      if (!body || !Array.isArray(body.sets)) continue;
-      for (const s of body.sets)
-        rows.push({ ...s, date: body.date || d.id, rir: s.rir ?? null, notes: "" });
-    }
-    state.remote = rows;
-    changed = true;
-  } catch (e) {
-    setSync("error", dbErr(e));
-  }
-  // The order is one small document, not part of the session window. Last write wins by
-  // timestamp; a local change not yet flushed is by definition newer and is left alone.
-  try {
-    const [o, t] = await Promise.all([
-      DB.doc("prefs/order").get(), DB.doc("prefs/sets").get()]);
-    const od = o.exists ? o.data() : null, td = t.exists ? t.data() : null;
-    // Merged per plan and per day, in both directions, so a document written by a view
-    // that never saw this device's edit can no longer replace it. A local day that is
-    // newer simply survives the merge and is pushed on the next flush.
-    const a = mergePrefsMap(state.order, state.orderAtBy, od);
-    const b = mergePrefsMap(state.setsBy, state.setsAtBy, td);
-    // The SELECTED plan is a single value, not a per-day one, so it is still
-    // last-write-wins on the document stamp - and only while this device has nothing
-    // unflushed, or switching plans here would undo a switch made on the phone.
-    const stamp = String(od?.updated_at || td?.updated_at || "");
-    if (od?.plan && !state.orderDirty && stamp && (!state.orderAt || stamp > state.orderAt))
-      state.plan = od.plan;
-    if (a || b) {
-      persistPrefs();
-      pruneOverrides();   // the store may hold overrides a newer routine.yaml made moot
-      changed = true;
-    }
-  } catch { /* prefs are a convenience - never fail a sync over them */ }
-  // THE fix for Today and Plan disagreeing about the exercise order. This is the one
-  // place remote state lands, it can replace the order and the set counts wholesale
-  // (another device wrote them later), and it used to render nothing - so both tabs kept
-  // whatever they last drew, and the next thing to refresh one of them on its own (paging
-  // Today by a day) left the other showing an order that no longer existed.
-  if (changed) renderRemote();
-}
-
-// Re-render on remote state arriving, except into a Plan field being typed in: a rebuild
-// there would take the half-typed exercise name with it. The tab renders on entry anyway,
-// so nothing stays stale for longer than it takes to look away.
-function renderRemote() {
-  if (!booted) return;
-  // A drag or a held row is a gesture in flight over rows this would replace underneath
-  // it. Let it finish - it re-renders when it lands.
-  if (dragActive || state.pick) { pendingRender = true; return; }
-  // Only TYPING is protected, and only until focus leaves the field. Skipping the render
-  // for anything focused inside the plan - a tapped drag handle included - and never
-  // coming back to it is how Plan kept showing an order state no longer held while Today
-  // showed the one it did.
-  const el = document.activeElement;
-  const typing = el && el.closest && el.closest("#planweek") &&
-    (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
-  if (typing) {
-    pendingRender = true;
-    el.addEventListener("blur", () => { if (pendingRender) { pendingRender = false; renderAll(); } },
-      { once: true });
+document.addEventListener("click", (e) => {
+  const t = e.target.closest("[data-act],[role=tab]");
+  if (!t) return;
+  if (t.getAttribute("role") === "tab") {
+    setState({ tab: t.dataset.tab, sheet: null, summaryOn: false, lift: null, libOn: false, switchOn: false, reorder: false }, { persist: false });
+    $("main").scrollTop = 0;
     return;
   }
-  pendingRender = false;
-  renderAll();
-}
-
-// The same page open in a second tab writes the same localStorage. Picking that up is
-// what stops two views of this app from showing two different plans.
-window.addEventListener("storage", (e) => {
-  if (e.key !== STORE_ORDER && e.key !== STORE_SETS) return;
-  absorbLocalPrefs();
-  renderRemote();
+  const a = t.dataset.act, v = t.dataset.v;
+  const num = (x) => parseFloat(x);
+  switch (a) {
+    // session
+    case "open-sheet": openSheet(t.dataset.ex); break;
+    case "move": {
+      const L = ensureLive();
+      const cur = (L.order || sessionLifts().map((l) => l.ex)).slice();
+      const i = cur.indexOf(t.dataset.ex), j = i + parseInt(t.dataset.dir, 10);
+      if (i >= 0 && j >= 0 && j < cur.length) { cur.splice(j, 0, cur.splice(i, 1)[0]); L.order = cur; }
+      setState({});
+      break;
+    }
+    case "toggle-reorder": {
+      const L = ensureLive();
+      if (!state.reorder) L.order = sessionLifts().map((l) => l.ex);
+      setState({ reorder: !state.reorder });
+      break;
+    }
+    case "finish": finish(); break;
+    case "close-summary": closeSummary(); break;
+    case "go-cardio": setState({ tab: "Cardio", cWhen: "visit" }, { persist: false }); break;
+    // log sheet
+    case "w": setState({ w: Math.max(0, +(state.w + num(t.dataset.d)).toFixed(1)) }, { persist: false }); break;
+    case "r": setState({ r: Math.max(1, state.r + num(t.dataset.d)) }, { persist: false }); break;
+    case "log-set": logSet(); break;
+    case "extra-set": {
+      const L = ensureLive();
+      L.extra = { ...L.extra, [state.sheet]: (L.extra[state.sheet] || 0) + 1 };
+      setState({});
+      break;
+    }
+    // cardio
+    case "c-type": setState({ cType: v, cKm: v === "Elliptical" ? "0" : state.cKm }, { persist: false }); break;
+    case "c-when": setState({ cWhen: v }, { persist: false }); break;
+    case "c-date": setState({ cDate: v }, { persist: false }); break;
+    case "c-min": setState({ cMin: String(Math.max(0, (parseFloat(state.cMin) || 0) + num(t.dataset.d))) }, { persist: false }); break;
+    case "c-km": setState({ cKm: String(Math.max(0, +((parseFloat(state.cKm) || 0) + num(t.dataset.d)).toFixed(1))) }, { persist: false }); break;
+    case "c-log": logCardio(); break;
+    case "c-undo": setState({ cardio: state.cardio.filter((x) => x.id !== (state.cLast || {}).id), cLast: null }); break;
+    // progress
+    case "win": setState({ win: v }, { persist: false }); break;
+    case "kpiview": setState({ kpiView: v }, { persist: false }); break;
+    case "kpibase": setState({ kpiBase: v }, { persist: false }); break;
+    case "lift": setState({ lift: t.dataset.ex }, { persist: false }); break;
+    // plan
+    case "day": setState({ day: v, armedDrop: null }, { persist: false }); break;
+    case "sets": editPlan((w) => { const r = w[state.day][+t.dataset.i]; r[1] = Math.max(0, r[1] + parseInt(t.dataset.d, 10)); }); break;
+    case "drop": {
+      // Removing a lift is destructive, so the first tap only arms it.
+      const key = `${state.day}:${t.dataset.i}`;
+      if (state.armedDrop !== key) { setState({ armedDrop: key }, { persist: false }); break; }
+      state.armedDrop = null;
+      editPlan((w) => { w[state.day].splice(+t.dataset.i, 1); });
+      break;
+    }
+    case "publish": { const base = clone(state.base); base[state.planKey] = clone(state.plans[state.planKey]); setState({ base }); break; }
+    case "undo-plan": { const plans = clone(state.plans); plans[state.planKey] = clone(state.base[state.planKey]); setState({ plans }); break; }
+    case "export": exportYaml(); break;
+    case "open-lib": setState({ libOn: true, query: "" }, { persist: false }); break;
+    case "add-lift": editPlan((w) => { w[state.day] = (w[state.day] || []).concat([[v, 3]]); }); setState({ libOn: false, query: "" }); break;
+    case "new-muscle": setState({ newMuscle: v }, { persist: false }); break;
+    case "create-lift": {
+      const name = state.query.trim().toLowerCase().replace(/\s+/g, "_");
+      if (!name) break;
+      const custom = { ...state.custom, [name]: { muscle: state.newMuscle, muscles: [state.newMuscle], increment: null, rep_range: [8, 12] } };
+      state.custom = custom;
+      editPlan((w) => { w[state.day] = (w[state.day] || []).concat([[name, 3]]); });
+      setState({ libOn: false, query: "" });
+      break;
+    }
+    // plan switcher
+    case "open-switch": setState({ switchOn: true }, { persist: false }); break;
+    case "pick-plan": setState({ planKey: v, switchOn: false }); break;
+    case "train": {
+      const L = ensureLive();
+      if (!Object.keys(L.logged).length) { L.plan = v; L.order = null; }
+      setState({ sessionPlanKey: v, switchOn: false, tab: "Session" });
+      break;
+    }
+    case "rename": setState({ renaming: v, draft: state.plans[v].name, renameError: "" }, { persist: false }); break;
+    case "rename-save": saveRename(); break;
+    case "rename-cancel": setState({ renaming: null, renameError: "" }, { persist: false }); break;
+    case "new-plan": newPlan(v === "copy"); break;
+    // history
+    case "sess": setState({ openSession: state.openSession === v ? null : v }, { persist: false }); break;
+    // overlays
+    case "close-ov": setState({ sheet: null, lift: null, libOn: false, switchOn: false, renaming: null }, { persist: false }); break;
+    default: break;
+  }
 });
 
-// One date at a time, stopping at the first failure so the queue keeps its order and
-// nothing is dropped on a flaky connection. A date with no local rows means the session
-// was removed here, so the document goes too.
-async function flushQueue() {
-  if (!DB || flushing || (!state.queue.length && !state.orderDirty)) return;
-  flushing = true;
-  setSync("pending");
-  try {
-    for (const date of [...state.queue]) {
-      const doc = sessionDoc(date);
-      try {
-        if (doc.sets.length) await DB.doc(`sessions/${date}`).set(doc);
-        else await DB.doc(`sessions/${date}`).delete();
-      } catch (e) {
-        const code = dbErr(e);
-        // invalid_argument and quota_exceeded cannot be retried into success - say so
-        // and stop, rather than looping on a write that will never land.
-        setSync("error", code);
-        if (code === "quota_exceeded" || code === "invalid_argument") state.queue = [];
-        saveQueue();
-        flushing = false;
-        return;
-      }
-      state.queue = state.queue.filter(d => d !== date);
-      saveQueue();
-    }
-    if (state.orderDirty) {
-      // The stamp is read once, before the writes: an edit made DURING them advances
-      // state.orderAt, and clearing the flag unconditionally afterwards is what would
-      // leave that edit sitting in this browser, never pushed and silently overwritten.
-      const at = state.orderAt;
-      try {
-        // Read, merge, then write - never a blind publish. Whatever another device put
-        // there since this one loaded is folded in first, so pushing Monday's order
-        // cannot take Wednesday's set counts down with it.
-        const [o0, t0] = await Promise.all([
-          DB.doc("prefs/order").get(), DB.doc("prefs/sets").get()]);
-        const m1 = mergePrefsMap(state.order, state.orderAtBy, o0.exists ? o0.data() : null);
-        const m2 = mergePrefsMap(state.setsBy, state.setsAtBy, t0.exists ? t0.data() : null);
-        if (m1 || m2) persistPrefs();
-        const stamp = prefsStamp();
-        await DB.doc("prefs/order").set(
-          { days: state.order, at: state.orderAtBy, plan: state.plan,
-            updated_at: stamp, schema: 3 });
-        await DB.doc("prefs/sets").set(
-          { days: state.setsBy, at: state.setsAtBy, updated_at: stamp, schema: 3 });
-        if (state.orderAt === at) state.orderDirty = false;
-        if (m1 || m2) renderRemote();
-      } catch (e) { setSync("error", dbErr(e)); flushing = false; return; }
-    }
-
-    await pullRemote();
-    setSync("idle");
-  } finally {
-    flushing = false;
-    renderSyncState();
-  }
-}
-
-function setSync(mode, code) {
-  state.sync = mode;
-  state.syncCode = code || null;
-  renderSyncState();
-}
-
-function renderSyncState() {
-  const n = state.queue.length;
-  const txt =
-    state.sync === "off"     ? ""
-    : state.sync === "error" ? ` · sync ${state.syncCode || "failed"}`
-    : n                      ? ` · ${n} to sync`
-    : " · synced";
-  // The build is in the header, not only at the foot of the Plan tab. A stale page on a
-  // phone is indistinguishable from a bug that was never fixed, and both times that has
-  // come up the first question was "which version is that?" - it should be answerable
-  // from any screenshot without scrolling anywhere.
-  $("hstate").textContent =
-    `${state.date} · ${state.sets.length} sets${txt} · ${BUILD.slice(5)}`;
-  const el = $("syncnote");
-  if (!el) return;
-  el.hidden = state.sync === "off" && !n;
-  el.className = "scannote" + (state.sync === "error" ? " bad" : "");
-  el.innerHTML =
-    state.sync === "off"
-      ? `<b>${n} session${n === 1 ? "" : "s"} held on this device only.</b> There is no ` +
-        `store behind this copy of the page - open it inside claude.ai to sync, or ` +
-        `Export rows and paste them into <code>log.csv</code>.`
-    : state.sync === "error"
-      ? `<b>Sync failed (${state.syncCode}).</b> ${n} session${n === 1 ? "" : "s"} still ` +
-        `only on this device. It retries on the next load; Export rows is the way out ` +
-        `if it keeps failing.`
-    : n
-      ? `${n} session${n === 1 ? "" : "s"} waiting to sync.`
-      : `Synced. Sessions are stored on your Claude account and reach every device.`;
-}
-
-// Resolves late and may never resolve: served anywhere but inside claude.ai there is no
-// store at all, and the page has to stay fully usable - localStorage alone, exactly as
-// it behaved before this existed.
-async function openStore() {
-  try {
-    DB = await window.claude?.use?.("db");
-  } catch { DB = null; }
-  if (!DB) { setSync("off"); return; }
-  setSync("idle");
-  await pullRemote();
-  await flushQueue();
-  // All three: a pull can bring back an exercise order or a set count this device did
-  // not have (a fresh browser, or a cleared cache), and every tab reads those.
-  renderAll();
-}
-
-// ------------------------------------------------------------ photo dump
-// Drop in photos of the machines - a nameplate, the QR-code landing page, the machine
-// itself - and get back a proposed lift per photo. In the published Artifact this runs
-// against Claude through the `sample` capability, on your own account. Served anywhere
-// else (Vercel, a file:// copy) there is no model behind the page: the photos are still
-// kept and attached to lifts, and identification is what `/scan` does in Claude Code.
-//
-// What comes back is a PROPOSAL, never a commit. Nothing reaches the plan until you
-// press Add, and `increment` arrives null unless Claude could actually read it off the
-// machine - the one field that must never be a guess.
-let SAMPLE = null, SAMPLE_IMAGES = null;
-
-// ~480px long edge at q0.78, the same shape /scan saves reference photos in: a dozen
-// of these fit in localStorage, a dozen phone originals do not.
-function shrinkImage(file) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(file);
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      const scale = Math.min(1, 480 / Math.max(img.width, img.height));
-      const c = document.createElement("canvas");
-      c.width = Math.round(img.width * scale);
-      c.height = Math.round(img.height * scale);
-      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-      c.toBlob(
-        (blob) => blob
-          ? resolve({ blob, url: c.toDataURL("image/jpeg", 0.78) })
-          : reject(new Error("could not encode")),
-        "image/jpeg", 0.78);
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("not an image")); };
-    img.src = url;
-  });
-}
-
-async function addPhotos(files) {
-  const list = [...files].filter(f => f.type.startsWith("image/"));
-  if (!list.length) return;
-  for (const f of list) {
-    try {
-      const { blob, url } = await shrinkImage(f);
-      state.photos.push({ id: `p${Date.now()}${state.photos.length}`, blob, url, name: f.name });
-    } catch (e) {
-      showScanNote(`could not read ${f.name} (${f.type || "unknown type"}): ${e.message}. ` +
-        `If it is a HEIC photo, share it as JPEG or take a screenshot of it.`, true);
-    }
-  }
-  state.proposals = null;
-  renderScan();
-}
-
-const showScanNote = (msg, bad) => {
-  $("scan-note").innerHTML = bad ? `<span class="err">${msg}</span>` : msg;
-};
-
-function libraryDigest() {
-  return Object.keys(EXERCISES).sort().map(e => {
-    const x = EXERCISES[e];
-    return `${e}: ${(x.aliases || []).join(", ")}`;
-  }).join("\n");
-}
-
-function scanPrompt(n) {
-  return [
-    `${n} photo(s) of gym equipment follow, in order: a machine nameplate, a QR-code`,
-    "landing page, or the machine itself. Identify the exercise in each.",
-    "",
-    "Existing exercise library (canonical name: aliases):",
-    libraryDigest(),
-    "",
-    `Valid muscle groups - nothing outside this list is allowed: ${MUSCLES.join(", ")}`,
-    "",
-    "Return ONLY a JSON array, one object per photo, in photo order:",
-    '{"photo": <0-based index>, "match": <canonical library name or null>,',
-    ' "name": <snake_case English name for a NEW entry, translated from the nameplate, or null>,',
-    ' "aliases": [<brand and model exactly as shown>, <the nameplate text as shown>],',
-    ' "muscles": [<prime movers ONLY>], "rep_range": [<floor>, <ceiling>],',
-    ' "increment_kg": <number or null>, "increment_source": "read" | "unknown",',
-    ' "bodyweight": <true|false>, "confidence": "high" | "low",',
-    ' "note": <one short line: what the plate says, and anything you could not read>}',
-    "",
-    "Rules:",
-    '- "match" only when the photo is clearly the SAME exercise already in the library.',
-    "  A plate-stack machine is NOT a match for a dumbbell or barbell version: dumbbell",
-    "  weight is per-dumbbell, stack weight is total, and one entry cannot carry both",
-    "  units. When in doubt propose a new entry.",
-    '- "increment_kg": ONLY when the plate increment is actually legible in the photo.',
-    '  Otherwise null and "unknown". Never infer it from what a stack usually is - a',
-    "  wrong increment silently corrupts every future load prescription for this lift.",
-    '- "muscles": prime movers only. Do not list a muscle that merely assists. Two',
-    "  entries only where a lift is genuinely co-primary.",
-    '- Not gym equipment: {"photo": i, "match": null, "name": null, "note": "<what it is>"}.',
-  ].join("\n");
-}
-
-async function identifyPhotos() {
-  if (!SAMPLE || !state.photos.length) return;
-  const max = SAMPLE_IMAGES.maxCount || 4;
-  const batch = state.photos.slice(0, max);
-  $("btn-identify").disabled = true;
-  showScanNote(`reading ${batch.length} photo${batch.length === 1 ? "" : "s"}…`);
-  try {
-    const out = await SAMPLE.json(scanPrompt(batch.length), {
-      images: batch.map(p => p.blob), modelTier: "complex",
-    });
-    const arr = Array.isArray(out) ? out : [out];
-    state.proposals = arr.map((r, i) => ({
-      ...r,
-      photoId: batch[r && Number.isInteger(r.photo) ? r.photo : i]?.id ?? batch[i]?.id,
-      sets: 3,
-      day: todayKey(),
-    }));
-    showScanNote(batch.length < state.photos.length
-      ? `${batch.length} of ${state.photos.length} read - this view allows ${max} per call.`
-      : "");
-  } catch (e) {
-    state.proposals = null;
-    showScanNote(e?.code === "rate_limited" ? "rate limited - try again in a minute"
-      : e?.code === "not_granted" ? "you declined - nothing was sent"
-      : `could not read the photos: ${e?.message || e}`, true);
-  }
-  $("btn-identify").disabled = false;
-  renderScan();
-}
-
-// A proposal becomes a lift only here, and an unread increment stays unread: the field
-// is empty and the row cannot be exported until a human types what the stack says.
-function acceptProposal(pr) {
-  const photo = state.photos.find(p => p.id === pr.photoId);
-  let key = pr.match && EXERCISES[pr.match] ? pr.match : null;
-  if (!key) {
-    if (!pr.name) return;
-    key = createProvisional(pr.name, {
-      aliases: pr.aliases, muscles: pr.muscles,
-      increment: pr.increment_source === "read" ? pr.increment_kg : null,
-      rep_range: Array.isArray(pr.rep_range) ? pr.rep_range : null,
-      bodyweight: !!pr.bodyweight, image: photo?.url || null,
-      note: pr.note || "", source: "photo",
-    });
-  }
-  if (!key) return;
-  ensureEditable();
-  state.routineBy[state.plan].week[pr.day].plan.push({ exercise: key, sets: clamp(pr.sets, 1, 8) });
-  saveRoutine();
-  state.proposals = state.proposals.filter(x => x !== pr);
-  if (photo) state.photos = state.photos.filter(p => p.id !== photo.id);
-  renderAll();
-  renderScan();
-}
-
-function renderScan() {
-  const on = !!SAMPLE;
-  $("scan-meta").textContent = on
-    ? "read on your Claude account"
-    : "no model here - use /scan";
-  $("btn-identify").hidden = !on || !state.photos.length;
-
-  $("scanqueue").innerHTML = state.photos.map(p =>
-    `<div class="qthumb"><img src="${p.url}" alt="${p.name}">
-       <button class="qdel" data-id="${p.id}" aria-label="Remove ${p.name}">&times;</button>
-     </div>`).join("");
-  for (const b of $("scanqueue").querySelectorAll(".qdel")) {
-    b.onclick = () => {
-      state.photos = state.photos.filter(p => p.id !== b.dataset.id);
-      state.proposals = null;
-      renderScan();
-    };
-  }
-
-  const props = state.proposals || [];
-  $("scanout").innerHTML = props.map((pr, i) => {
-    const photo = state.photos.find(p => p.id === pr.photoId);
-    if (!pr.match && !pr.name)
-      return `<div class="prop bad"><div class="prophead"><b>not equipment</b></div>
-        <p class="defnote">${pr.note || ""}</p></div>`;
-    const known = pr.match && EXERCISES[pr.match];
-    const read = pr.increment_source === "read" && typeof pr.increment_kg === "number";
-    return `<div class="prop" data-i="${i}">
-      <div class="prophead">
-        ${photo ? `<button class="thumb" data-role="preview" data-img="${photo.url}"
-            aria-label="Show photo"><img src="${photo.url}" alt=""></button>` : ""}
-        <span class="propname">${label(known ? pr.match : slug(pr.name || ""))}</span>
-        <span class="proptag ${known ? "known" : "new"}">${known ? "in library" : "new"}</span>
-      </div>
-      <div class="propmeta">${(pr.muscles || []).join(" · ") || "no muscles read"}
-        ${pr.confidence === "low" ? ' · <span class="lowconf">low confidence</span>' : ""}</div>
-      ${known ? "" : `<div class="propnums">
-        <label class="${read ? "" : "missing"}">increment kg
-          <input type="number" step="0.5" min="0" data-f="inc"
-                 value="${read ? pr.increment_kg : ""}" placeholder="?">
-        </label>
-        <label>reps
-          <input type="number" min="1" data-f="floor" value="${pr.rep_range?.[0] ?? ""}">
-          <span>&ndash;</span>
-          <input type="number" min="1" data-f="ceiling" value="${pr.rep_range?.[1] ?? ""}">
-        </label>
-      </div>`}
-      <p class="defnote">${pr.note || ""}${read ? "" :
-        known ? "" : "<br>The increment was not legible - read it off the stack."}</p>
-      <div class="propadd">
-        <select data-f="day">${DAYS.map(d =>
-          `<option value="${d}" ${d === pr.day ? "selected" : ""}>${d}</option>`).join("")}</select>
-        <div class="stepper">
-          <button data-f="less" aria-label="fewer sets">&minus;</button>
-          <span class="n">${pr.sets}</span>
-          <button data-f="more" aria-label="more sets">+</button>
-        </div>
-        <button class="primary" data-f="add">Add</button>
-        <button data-f="skip">Skip</button>
-      </div>
-    </div>`;
-  }).join("");
-
-  for (const el of $("scanout").querySelectorAll(".prop[data-i]")) {
-    const pr = props[+el.dataset.i];
-    const q = (f) => el.querySelector(`[data-f="${f}"]`);
-    q("day").onchange = (e) => { pr.day = e.target.value; };
-    q("less").onclick = () => { pr.sets = clamp(pr.sets - 1, 1, 8); renderScan(); };
-    q("more").onclick = () => { pr.sets = clamp(pr.sets + 1, 1, 8); renderScan(); };
-    q("skip").onclick = () => {
-      state.proposals = state.proposals.filter(x => x !== pr); renderScan();
-    };
-    q("add").onclick = () => {
-      const inc = q("inc"), fl = q("floor"), ce = q("ceiling");
-      if (inc) {
-        const v = parseFloat(String(inc.value).replace(",", "."));
-        pr.increment_kg = Number.isFinite(v) && v > 0 ? v : null;
-        pr.increment_source = pr.increment_kg ? "read" : "unknown";
-        const f = parseFloat(fl.value), c = parseFloat(ce.value);
-        pr.rep_range = f > 0 && c >= f ? [f, c] : null;
-      }
-      acceptProposal(pr);
-    };
-    const t = el.querySelector('[data-role="preview"]');
-    if (t) t.onclick = () => openLightbox(t.dataset.img);
-  }
-}
-
-// The picker is opened by a real <label for>, not by JS calling .click() on a hidden
-// input: on iOS a display:none file input often does not open at all from a synthetic
-// click, which is exactly the "cannot submit the image" this hit. The label needs no
-// script, so keyboard activation is all that is left to wire.
-$("photos").onchange = (e) => { addPhotos(e.target.files); e.target.value = ""; };
-$("btn-pick").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("photos").click(); }
+// Typed numbers and the library query. Committed on input so a half-typed value never
+// gets lost to a re-render; the re-render is what would eat it, so these do not trigger
+// a full renderAll.
+document.addEventListener("input", (e) => {
+  const el = e.target;
+  if (el.id === "s-w") { state.w = Math.max(0, parseFloat(el.value) || 0); syncSheetLabel(); }
+  else if (el.id === "s-r") { state.r = Math.max(1, parseInt(el.value, 10) || 1); syncSheetLabel(); }
+  else if (el.id === "c-min") { state.cMin = el.value.replace(/[^0-9]/g, ""); }
+  else if (el.id === "c-km") { state.cKm = el.value.replace(",", ".").replace(/[^0-9.]/g, ""); }
+  else if (el.id === "libq") { state.query = el.value; const at = el.selectionStart; renderOverlay(); const n = $("libq"); if (n) { n.focus(); n.setSelectionRange(at, at); } }
+  else if (el.id === "rename") { state.draft = el.value; }
 });
-for (const ev of ["dragenter", "dragover"])
-  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.add("over"); });
-for (const ev of ["dragleave", "drop"])
-  $("drop").addEventListener(ev, (e) => { e.preventDefault(); $("drop").classList.remove("over"); });
-$("drop").addEventListener("drop", (e) => addPhotos(e.dataTransfer.files));
-$("btn-identify").onclick = identifyPhotos;
+document.addEventListener("change", (e) => {
+  if (["c-min", "c-km"].includes(e.target.id)) { persist(); renderCardio(); }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && ["s-w", "s-r", "c-min", "c-km", "libq"].includes(e.target.id)) e.target.blur();
+  if (e.target.id === "rename") { if (e.key === "Enter") saveRename(); if (e.key === "Escape") setState({ renaming: null }, { persist: false }); }
+  if (e.key === "Escape" && (state.sheet || state.libOn || state.switchOn || state.lift)) {
+    setState({ sheet: null, libOn: false, switchOn: false, lift: null }, { persist: false });
+  }
+});
+// A div role=button still has to answer the keyboard.
+document.addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.matches?.('[role="button"][data-act]')) {
+    e.preventDefault(); e.target.click();
+  }
+});
 
-// Resolves late and may never resolve at all - the page is built for its absence and
-// lights the feature up if and when the viewer can run it.
-(async () => {
-  try {
-    const s = await window.claude?.use?.("sample");
-    if (!s) return;
-    const lim = await s.limits().catch(() => null);
-    if (!lim?.images) return;
-    SAMPLE = s;
-    SAMPLE_IMAGES = lim.images;
-    // Deliberately NOT narrowed to lim.images.mediaTypes. An iPhone's camera roll is
-    // HEIC, which is not on that list, so filtering by it greys out the very photos
-    // this feature is for. Everything is re-encoded to JPEG by shrinkImage() before it
-    // is sent, so what the input accepts and what Claude accepts are different things.
-    renderScan();
-  } catch { /* no viewer, no capability - the fallback copy is already rendered */ }
-})();
-
-// ------------------------------------------------------------ session I/O
-const csvRow = (s) =>
-  `${s.date},strength,${s.exercise},${s.set_no},${+s.weight_kg},${s.reps},` +
-  `${s.rir === null || s.rir === undefined ? "" : s.rir},`;
-
-// Everything submitted on this device plus whatever is open right now, so nothing is
-// lost between here and log.csv.
-function showCsv() {
-  const out = $("csvout");
-  const live = state.sets.map(s => ({ ...s, date: state.sessionDate || state.date }));
-  const rows = [...state.committed, ...live].sort((a, b) =>
-    a.date.localeCompare(b.date) || a.exercise.localeCompare(b.exercise) || a.set_no - b.set_no);
-  if (!rows.length) { out.hidden = true; return showFeedback(`<span class="err">? nothing logged yet</span>`); }
-  out.textContent = "date,type,exercise,set_no,weight_kg,reps,rir,notes\n" + rows.map(csvRow).join("\n");
-  out.hidden = false;
-  const days = new Set(rows.map(r => r.date)).size;
-  showFeedback(
-    `<span class="l1">${rows.length} sets across ${days} session${days === 1 ? "" : "s"}</span>\n` +
-    `<span class="l2">${state.committed.length} submitted, ${live.length} still open</span>\n` +
-    `<span class="hint">paste into log.csv, then: analyze.py validate &amp;&amp; web/build_data.py</span>`);
+function syncSheetLabel() {
+  const b = document.querySelector('[data-act="log-set"]');
+  const n = (state.live && state.live.logged[state.sheet] || []).length + 1;
+  if (b) b.textContent = `Log set ${n} · ${state.w} × ${state.r}`;
 }
 
-// Submit: bank the session on this device and move to the next day's plan.
-//
-// This is the honest limit of what a static page can do. It makes the session real for
-// everything the browser computes itself - volume against the bands, and the "last week"
-// baseline the next session is measured against, which is most of the point. It does NOT
-// touch the deep analytics: e1RM slopes, strength index, the volume-load bridge, stalls
-// and adherence all come from analyze.py at build time and stay frozen until log.csv is
-// updated and it runs again. Recomputing them here would mean a second implementation of
-// the rule in JavaScript, which is the one thing CLAUDE.md rules out.
-function submitSession() {
-  if (!state.sets.length)
-    return showFeedback(`<span class="err">? nothing logged - no session to submit</span>`);
+/* ----------------------------------------------------------------------- boot */
 
-  const wasDate = state.sessionDate || state.date;
-  const dated = state.sets.map(s => ({ ...s, date: wasDate, notes: "" }));
-  const sets = dated.length;
-  const lifts = new Set(dated.map(s => s.exercise)).size;
+function hydrate(doc) {
+  if (!doc) return;
+  if (doc.sessions) state.sessions = { ...state.sessions, ...doc.sessions };
+  if (Array.isArray(doc.cardio)) {
+    const byId = new Map(state.cardio.map((c) => [c.id, c]));
+    for (const c of doc.cardio) byId.set(c.id, c);
+    state.cardio = [...byId.values()].sort((a, b) => (a.date < b.date ? 1 : -1));
+  }
+  if (doc.plans) state.plans = { ...state.plans, ...doc.plans };
+  if (doc.base) state.base = { ...state.base, ...doc.base };
+  if (doc.custom) state.custom = { ...state.custom, ...doc.custom };
+  if (doc.planKey && state.plans[doc.planKey]) state.planKey = doc.planKey;
+  if (doc.sessionPlanKey && state.plans[doc.sessionPlanKey]) state.sessionPlanKey = doc.sessionPlanKey;
+  if (doc.live && doc.live.date === today()) state.live = doc.live;
+}
 
-  state.committed = [...state.committed, ...dated];
-  saveCommitted();
-  queueDate(wasDate);
-  flushQueue();          // deliberately not awaited: Submit must never wait on a network
-  state.sets = [];
-  state.sessionDate = null;
-  state.sticky = null;
-  $("csvout").hidden = true;
-  saveSession();
-
-  // Advance from the day just submitted, wherever the view happened to be.
-  setDay(Math.round((Date.parse(wasDate) - Date.parse(isoDate(new Date()))) / 864e5) + 1);
-  saveSession();          // the new (empty) day, so a reload lands in the same place
+async function boot() {
+  const local = readLocal();
+  hydrate(local);
+  state.day = weekdayOf(today());
   renderAll();
-
-  showFeedback(
-    `<span class="l1">submitted ${wasDate}: ${sets} sets, ${lifts} lifts</span>\n` +
-    `<span class="l2">next up ${state.date} &middot; ${routine().week[todayKey()].name}</span>\n` +
-    `<span class="hint">${DB ? "stored on your Claude account" : "held on this device"} ` +
-    `· deep trends need an analyze.py run</span>`);
-}
-
-function saveCommitted() {
-  try { localStorage.setItem(STORE_LOG, JSON.stringify(state.committed)); }
-  catch { /* private mode */ }
-}
-function loadCommitted() {
-  try {
-    const raw = localStorage.getItem(STORE_LOG);
-    const d = raw ? JSON.parse(raw) : null;
-    if (Array.isArray(d)) state.committed = d.filter(r => r && r.date && r.exercise);
-  } catch { /* ignore */ }
-}
-
-function showFeedback(html) { $("feedback").innerHTML = html; }
-
-function saveSession() {
-  try { localStorage.setItem(STORE_SESSION, JSON.stringify(
-    { date: state.sessionDate, sets: state.sets, sticky: state.sticky,
-      viewDate: state.date, dayOffset: state.dayOffset })); }
-  catch { /* private mode */ }
-}
-function loadSession() {
-  try {
-    const raw = localStorage.getItem(STORE_SESSION);
-    if (!raw) return;
-    const d = JSON.parse(raw);
-    if (!d) return;
-    // The sets carry their OWN date, so they survive a reload whatever day was on screen
-    // - but only as that date. A session left open overnight reappears under the day it
-    // was logged on, never silently under today.
-    if (Array.isArray(d.sets) && d.sets.length && d.date) {
-      state.sets = d.sets;
-      state.sessionDate = d.date;
-      state.sticky = d.sticky || null;
-    }
-    // Restore the view. dayOffset is now signed, and is recomputed from the stored view
-    // date so that yesterday stays yesterday across a date rollover rather than becoming
-    // the day before that.
-    const view = d.viewDate || d.date;
-    if (view && /^\d{4}-\d{2}-\d{2}$/.test(view)) {
-      const off = Math.round((Date.parse(view) - Date.parse(isoDate(new Date()))) / 864e5);
-      if (Number.isFinite(off) && Math.abs(off) <= 400) setDay(off);
-    } else if (Number.isInteger(d.dayOffset)) {
-      setDay(d.dayOffset);
-    }
-  } catch { /* ignore */ }
-}
-
-// ---------------------------------------------------------------- wiring
-function selectTab(name) {
-  for (const t of ["today", "trends", "plan"]) {
-    $(`tab-${t}`).setAttribute("aria-selected", String(t === name));
-    $(`p-${t}`).hidden = t !== name;
-  }
-  // A row left picked up on a tab you walked away from is a held gesture with its
-  // instruction scrolled out of sight. Drop it.
-  if (state.pick) state.pick = null;
-  // The belt to renderAll's braces: whatever you switch to is computed now, from current
-  // state, so no tab can be showing a render from before the last change however it got
-  // there. Cheap - a tab switch already costs a repaint, and it loses no focus.
-  if (booted) ({ today: renderToday, trends: renderTrends, plan: renderPlan }[name])();
-}
-// Nothing renders until the first renderAll(): selectTab runs once during start-up,
-// before the data the renderers read has finished loading.
-let booted = false;
-for (const t of ["today", "trends", "plan"]) $(`tab-${t}`).onclick = () => selectTab(t);
-
-$("btn-more").onclick = () => { state.logLimit += 20; renderSessionLog(); };
-$("btn-submit").onclick = submitSession;
-$("btn-end").onclick = showCsv;
-$("btn-clear").onclick = () => {
-  if (!state.sets.length || confirm("Discard the open session? Nothing has been written to log.csv.")) {
-    state.sessionDate = null;
-    state.sets = []; state.sticky = null; $("csvout").hidden = true;
-    renderToday(); showFeedback(`<span class="hint">session discarded</span>`);
-    saveSession();
-  }
-};
-
-for (const b of document.querySelectorAll("#volseg button")) {
-  b.onclick = () => {
-    state.window = +b.dataset.w;
-    for (const x of document.querySelectorAll("#volseg button")) x.ariaPressed = String(x === b);
-    renderMeters();
-  };
-}
-$("btn-yaml").onclick = exportYaml;
-$("btn-reset").onclick = () => {
-  if (confirm("Discard your edits - set counts, lifts AND your exercise order - and reload routine.yaml as published?")) {
-    state.routineBy = {}; state.planName = {};
-    state.dropped = 0;
-    state.order = {};
-    state.setsBy = {};
-    state.orderAtBy = {};
-    state.setsAtBy = {};
-    // Every day of every plan changed, so every one of them has to out-stamp the store.
-    savePrefs(planIds().flatMap(p => DAYS.map(d => [p, d])));
-    try { localStorage.removeItem(STORE_ROUTINE); } catch { /* ignore */ }
-    $("yamlout").hidden = true;
+  const remote = await store.pull();
+  if (remote) {
+    // Remote is the store of record; anything only here goes up on the next push.
+    const localer = local && remote.updated_at && local.updated_at > remote.updated_at;
+    hydrate(remote);
+    if (localer) hydrate(local);
     renderAll();
+    persist(localer);
+  } else {
+    renderHeader();
   }
-};
+}
 
-// ----------------------------------------------------------------- start
-loadProvisional();   // before anything renders: the routine may name one of these
-loadRoutine();
-loadCommitted();
-loadQueue();
-loadOrder();
-loadSession();
-selectTab("today");
-renderAll();
-booted = true;
-renderScan();
-openStore();                                   // async; the page is already usable
-addEventListener("online", () => flushQueue());
-showFeedback(state.sets.length
-  ? `<span class="hint">session restored: ${state.sets.length} sets</span>`
-  : `<span class="l1">${routine().week[todayKey()].name}</span>\n` +
-    `<span class="l2">${ANALYTICS.sessions.length
-      ? `${ANALYTICS.sessions.length} sessions logged · last ${ANALYTICS.last_logged}`
-      : "no history yet - every lift reads no baseline until you log it"}</span>\n` +
-    `<span class="hint">tap into a set box and enter the weight</span>`);
+addEventListener("online", () => persist());
+boot();
