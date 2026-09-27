@@ -392,6 +392,13 @@ Three layers, and conflating them loses data:
 - **A provisional lift cannot be logged.** No `increment` means no prescription: the
   weight boxes are disabled and the sheet says `needs setup`. **`increment` is never
   guessed**, and `Export routine.yaml` emits a commented stub rather than a value.
+- **The Plan day strip shows DATES, and the set count carries its unit.** It first
+  shipped as a weekday over the week's set count - `MON 24 / TUE 28 / WED 24` - and was
+  reported as "the dates are random", correctly: two digits under a weekday name is read
+  as a date by everyone, and set counts do not ascend. The date shown is the NEXT
+  occurrence of that weekday, counting today as itself, because on a Sunday "this week's
+  Monday" is six days in the PAST and tomorrow would never be marked. Today and tomorrow
+  are tagged on the strip. Any figure that could be mistaken for a date needs its unit.
 - **Touch targets are 44px, and the destructive control is armed.** The row's `x` takes
   two taps and sits clear of the `+` beside it. Both were got wrong before.
 - **A design change may not move or hide a control** - see Hard rules.

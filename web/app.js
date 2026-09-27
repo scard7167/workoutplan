@@ -63,6 +63,22 @@ const dayDiff = (a, b) => Math.round((new Date(a + "T00:00:00") - new Date(b + "
 const weekdayOf = (s) => JS_DAY[new Date(s + "T00:00:00").getDay()];
 const fmtDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 
+// The NEXT date a weekday falls on, counting today as itself. The Plan tab edits a
+// repeating week, so the useful question is not "what was this week's Monday" - on a
+// Sunday that is six days in the PAST - but "when do I next train this day". This way
+// every date on the strip is today or ahead, and today and tomorrow are always right.
+function nextDateOf(dayKey) {
+  const t = today();
+  const want = DAYS.indexOf(dayKey);
+  const have = DAYS.indexOf(weekdayOf(t));
+  return addDays(t, (want - have + 7) % 7);
+}
+
+const dayRel = (dayKey) => {
+  const d = nextDateOf(dayKey);
+  return d === today() ? "today" : d === addDays(today(), 1) ? "tomorrow" : "";
+};
+
 const disp = (ex) => ex.replace(/_/g, " ");
 const primeOf = (ex) => (EXERCISES[ex] ? EXERCISES[ex].muscles[0] : (state.custom[ex] || {}).muscle || null);
 const groupOf = (ex) => TO_GROUP[primeOf(ex)] || null;
@@ -863,10 +879,22 @@ function renderPlan() {
   const live = state.planKey === state.sessionPlanKey && state.day === weekdayOf(today());
   const gNow = groupTotals(week), gBase = groupTotals((state.base[state.planKey] || { week: {} }).week);
 
+  // The strip used to read "MON 24 / TUE 28 / WED 24" - weekday over the week's set
+  // count. Two digits under a weekday name is read as a DATE by everyone, and since the
+  // counts do not ascend it looked like random dates. So the count now carries its unit,
+  // the real date of this week's occurrence sits beside the weekday, and today and
+  // tomorrow are marked. Nothing was removed.
   const strip = DAYS.map((d) => {
     const n = sum((week[d] || []).map((x) => x[1]));
-    return `<button class="day" data-act="day" data-v="${d}" aria-pressed="${state.day === d}">
-      <span class="k">${DAY_LABEL[d]}</span><span class="n">${n || "—"}</span></button>`;
+    const date = nextDateOf(d);
+    const rel = date === today() ? "today" : date === addDays(today(), 1) ? "tmrw" : "";
+    return `<button class="day${rel ? " rel" : ""}" data-act="day" data-v="${d}"
+      aria-pressed="${state.day === d}"
+      aria-label="${DAY_LABEL[d]} ${fmtDate(date)}${rel ? `, ${rel === "today" ? "today" : "tomorrow"}` : ""}, ${plural(n, "set")}">
+      <span class="k">${DAY_LABEL[d]}</span>
+      <span class="dt">${+date.slice(8)}</span>
+      <span class="n">${n ? `${n} set${n === 1 ? "" : "s"}` : "rest"}</span>
+      ${rel ? `<span class="rl">${rel}</span>` : ""}</button>`;
   }).join("");
 
   const armed = (i) => state.armedDrop === `${state.day}:${i}`;
@@ -906,9 +934,12 @@ function renderPlan() {
     </div>
 
     <div class="daystrip">${strip}</div>
+    <p class="foot" style="margin:-6px 0 0">Dates = next time that day comes round. Small
+      figure = planned sets.</p>
 
     <div class="screenhead" style="align-items:center">
-      <h1 style="font-size:16px">${DAY_LABEL[state.day]}${dayLifts.length ? "" : " · rest"}</h1>
+      <h1 style="font-size:16px">${DAY_LABEL[state.day]} ${esc(fmtDate(nextDateOf(state.day)))}${
+        dayRel(state.day) ? ` · ${dayRel(state.day)}` : ""}${dayLifts.length ? "" : " · rest"}</h1>
       <span class="meta">${plural(sum(dayLifts.map((x) => x[1])), "set")}</span>
     </div>
 
