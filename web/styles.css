@@ -42,7 +42,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body {
-  margin: 0; padding: 0; height: 100%;
+  margin: 0; padding: 0; height: 100%; overflow: hidden;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-ui);
@@ -64,9 +64,12 @@ button { appearance: none; background: none; border: 0; cursor: pointer; padding
 
 /* ------------------------------------------------------------------ shell */
 
+/* The shell is exactly one viewport tall so that MAIN scrolls, not the body. If the
+   shell is allowed to grow, an absolutely positioned overlay anchors to the top of a
+   shell that has already scrolled out of view and renders as a blank screen. */
 #app {
   display: flex; flex-direction: column;
-  min-height: 100%; max-width: 430px; margin: 0 auto;
+  height: 100vh; height: 100dvh; max-width: 430px; margin: 0 auto;
   position: relative; overflow: hidden;
 }
 
@@ -248,8 +251,11 @@ h1.big { font-size: 26px; letter-spacing: -.02em; }
 .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 7px; }
 .grid7 { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.stepper { border-radius: 8px; box-shadow: var(--hair); padding: 10px 11px; display: flex; flex-direction: column; gap: 8px; }
-.stepper .row { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+/* Grid and flex children refuse to shrink below their content by default, which sent
+   the second stepper off the right edge of the sheet. */
+.grid2 > *, .grid4 > *, .grid7 > *, .hgrid > * { min-width: 0; }
+.stepper { min-width: 0; border-radius: 8px; box-shadow: var(--hair); padding: 10px 11px; display: flex; flex-direction: column; gap: 8px; }
+.stepper .row { display: flex; align-items: center; justify-content: space-between; gap: 2px; min-width: 0; }
 .stepper .val { flex: 1; text-align: center; font: 500 19px/1 var(--font-mono); font-variant-numeric: tabular-nums; border: 0; background: none; min-width: 0; padding: 0; }
 .confirm { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: 8px; background: var(--color-surface); }
 .confirm .t { flex: 1; font: 400 11.5px/1.4 var(--font-mono); color: var(--color-neutral-300); }
