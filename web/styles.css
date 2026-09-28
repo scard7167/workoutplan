@@ -202,13 +202,16 @@ h1.big { font-size: 26px; letter-spacing: -.02em; }
 
 /* --------------------------------------------------------------- session */
 
-.chiprow { display: flex; align-items: center; gap: 8px; }
+.chiprow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; min-height: 34px;
   padding: 7px 11px; border-radius: 99px; border: 1px solid var(--color-neutral-800);
   font: 500 11.5px/1 var(--font-ui); color: var(--color-neutral-400);
 }
 .chip b { color: var(--color-text); font-weight: 500; }
+/* A day chip that is NOT today's is a state worth seeing at a glance. */
+.chip.on { border-color: var(--color-accent); background: var(--color-accent-wash); color: var(--color-accent-300); }
+.chip.on b { color: var(--color-text); }
 .chiprow .btn.sm { margin-left: auto; }
 
 .liftlist { display: flex; flex-direction: column; gap: 7px; }

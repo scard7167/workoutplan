@@ -255,7 +255,7 @@ const state = {
   live: null,                      // {date, plan, logged:{}, extra:{}, order:null}
   // ui only
   reorder: false, sheet: null, w: 0, r: 8, rir: null, summaryOn: false, lift: null,
-  libOn: false, query: "", newMuscle: "chest", switchOn: false,
+  libOn: false, query: "", newMuscle: "chest", switchOn: false, dayOn: false,
   renaming: null, draft: "", renameError: "",
   openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null,
   lastSummary: null, armedDrop: null,
@@ -269,7 +269,7 @@ const liveDate = () => (state.live ? state.live.date : today());
 function ensureLive() {
   const d = today();
   if (state.live && state.live.date !== d && !Object.keys(state.live.logged).length) state.live = null;
-  if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {} };
+  if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {}, dayKey: null };
   return state.live;
 }
 
@@ -434,10 +434,17 @@ function roundDownTo(kg, inc) {
 
 // The day's lifts: the session plan's week, plus any ad-hoc extra sets, in the order
 // the session was reordered into (session-scoped, never written back to the plan).
+// The weekday whose plan is driving today's session. Normally today's own, but a
+// skipped day is the normal case in a 7-day week, so it can be overridden for THIS
+// session only - the plan itself is never touched and the sets still log under today's
+// real date, because that is when they happened.
+const liveDay = () => (state.live && state.live.dayKey) || weekdayOf(liveDate());
+const dayShifted = () => liveDay() !== weekdayOf(liveDate());
+
 function sessionLifts() {
   const L = ensureLive();
   const week = weekOf(L.plan);
-  const src = week[weekdayOf(L.date)] || [];
+  const src = week[liveDay()] || [];
   const per = bySession(allSets().filter((s) => s.date < L.date));
   let list = src.map(([ex, sets]) => {
     const x = per[ex];
@@ -449,6 +456,18 @@ function sessionLifts() {
       done: (L.logged[ex] || []).length,
     };
   });
+  // Anything already logged today that this day's plan does not contain still shows,
+  // or switching the day would hide sets that are about to be written.
+  const shown = new Set(list.map((l) => l.ex));
+  for (const ex of Object.keys(L.logged)) {
+    if (shown.has(ex)) continue;
+    const x = per[ex];
+    list.push({
+      ex, name: disp(ex), muscle: primeOf(ex), planSets: 0,
+      sets: L.logged[ex].length, top: x ? `${x.series[x.series.length - 1].top.w} × ${x.series[x.series.length - 1].top.reps}` : null,
+      done: L.logged[ex].length, offPlan: true,
+    });
+  }
   if (L.order) {
     const ix = (n) => { const i = L.order.indexOf(n); return i < 0 ? 999 : i; };
     list = list.slice().sort((a, b) => ix(a.ex) - ix(b.ex));
@@ -540,7 +559,8 @@ function renderSession() {
     ${storeBanner()}
     <div class="screenhead">
       <div>
-        <div class="kicker">${fmtDate(L.date)} · ${esc(planName)}</div>
+        <div class="kicker">${fmtDate(L.date)} · ${esc(planName)}${
+          dayShifted() ? ` · ${DAY_LABEL[liveDay()]}'s session` : ""}</div>
         <h1>${lifts.length ? esc(muscles.slice(0, 3).join(" + ")) : "Rest day"}</h1>
       </div>
       <div class="right">
@@ -551,6 +571,8 @@ function renderSession() {
 
     <div class="chiprow">
       <button class="chip" data-act="open-switch">plan <b>${esc(planName)}</b> <span class="mono">⌄</span></button>
+      <button class="chip${dayShifted() ? " on" : ""}" data-act="open-day">
+        ${dayShifted() ? "doing" : "day"} <b>${DAY_LABEL[liveDay()]}</b> <span class="mono">⌄</span></button>
       ${lifts.length > 1 ? `<button class="btn sm" data-act="toggle-reorder">${state.reorder ? "Done" : "Reorder"}</button>` : ""}
     </div>
 
@@ -1018,6 +1040,7 @@ function renderOverlay() {
   if (state.summaryOn) return void (o.innerHTML = summaryHtml());
   if (state.lift) return void (o.innerHTML = liftHtml());
   if (state.sheet) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${sheetHtml()}`);
+  if (state.dayOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${dayHtml()}`);
   if (state.switchOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${switchHtml()}`);
   if (state.libOn) return void (o.innerHTML = `<div class="scrim" data-act="close-ov"></div>${libHtml()}`);
   o.innerHTML = "";
@@ -1087,6 +1110,34 @@ function sheetHtml() {
         state.w == null ? "Enter the weight" : `Log set ${done.length + 1} · ${state.w} × ${state.r}`}</button>
       <button class="btn sm" data-act="extra-set" style="flex:none">+1 set</button>
     </div>
+  </div>`;
+}
+
+// Choosing which day's workout to run today. Session-scoped: the plan is untouched and
+// the sets still log under today's date, so a skipped Monday done on Tuesday reads as
+// exactly that - Monday unmet, Tuesday's chest work logged on Tuesday.
+function dayHtml() {
+  const L = ensureLive();
+  const week = weekOf(L.plan);
+  const mine = weekdayOf(L.date);
+  const rows = DAYS.map((d) => {
+    const plan = week[d] || [];
+    const n = sum(plan.map((x) => x[1]));
+    const muscles = uniq(plan.map(([ex]) => TO_GROUP[primeOf(ex)] || primeOf(ex)).filter(Boolean));
+    const on = d === liveDay();
+    return `<button class="planpick${on ? " on" : ""}" data-act="pick-day" data-v="${d}">
+      <span><span class="nm">${DAY_LABEL[d]}${d === mine ? " · today" : ""}</span>
+        <span class="sub">${n ? `${plural(n, "set")} · ${esc(muscles.slice(0, 3).join(" + "))}` : "rest day"}</span></span>
+      ${on ? `<span class="tag on">doing</span>` : ""}</button>`;
+  }).join("");
+  return `<div class="sheet" role="dialog" aria-modal="true">
+    <span class="handle"></span>
+    <div class="sheethead"><div><h2>Which session today?</h2>
+      <div class="sub">${fmtDate(L.date)} is a ${DAY_LABEL[mine]}. Missed a day? Run it now.</div></div>
+      <button class="closebtn" data-act="close-ov">Close</button></div>
+    ${rows}
+    <p class="foot">This changes today only - the weekly plan is not touched, and the sets
+      are logged under today's real date.</p>
   </div>`;
 }
 
@@ -1291,7 +1342,7 @@ function finish() {
   };
   state.sessions = sessions;
   sessions[L.date] = { date: L.date, plan: L.plan, lifts, at: new Date().toISOString() };
-  state.live = { date: today(), plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {} };
+  state.live = { date: today(), plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {}, dayKey: null };
   setState({ summaryOn: true, lastSummary: snap, sheet: null, reorder: false });
 }
 
@@ -1458,7 +1509,7 @@ document.addEventListener("click", (e) => {
   const t = e.target.closest("[data-act],[role=tab]");
   if (!t) return;
   if (t.getAttribute("role") === "tab") {
-    setState({ tab: t.dataset.tab, sheet: null, summaryOn: false, lift: null, libOn: false, switchOn: false, reorder: false }, { persist: false });
+    setState({ tab: t.dataset.tab, sheet: null, summaryOn: false, lift: null, libOn: false, switchOn: false, dayOn: false, reorder: false }, { persist: false });
     $("main").scrollTop = 0;
     return;
   }
@@ -1544,6 +1595,14 @@ document.addEventListener("click", (e) => {
     }
     // plan switcher
     case "open-switch": setState({ switchOn: true }, { persist: false }); break;
+    case "open-day": setState({ dayOn: true }, { persist: false }); break;
+    case "pick-day": {
+      const L = ensureLive();
+      L.dayKey = v === weekdayOf(L.date) ? null : v;
+      L.order = null;                       // the old order belonged to the old day
+      setState({ dayOn: false });
+      break;
+    }
     case "pick-plan": setState({ planKey: v, switchOn: false }); break;
     case "train": {
       const L = ensureLive();
@@ -1558,7 +1617,7 @@ document.addEventListener("click", (e) => {
     // history
     case "sess": setState({ openSession: state.openSession === v ? null : v }, { persist: false }); break;
     // overlays
-    case "close-ov": setState({ sheet: null, lift: null, libOn: false, switchOn: false, renaming: null }, { persist: false }); break;
+    case "close-ov": setState({ sheet: null, lift: null, libOn: false, switchOn: false, dayOn: false, renaming: null }, { persist: false }); break;
     default: break;
   }
 });
@@ -1585,8 +1644,8 @@ document.addEventListener("change", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && ["s-w", "s-r", "c-min", "c-km", "libq"].includes(e.target.id)) e.target.blur();
   if (e.target.id === "rename") { if (e.key === "Enter") saveRename(); if (e.key === "Escape") setState({ renaming: null }, { persist: false }); }
-  if (e.key === "Escape" && (state.sheet || state.libOn || state.switchOn || state.lift)) {
-    setState({ sheet: null, libOn: false, switchOn: false, lift: null }, { persist: false });
+  if (e.key === "Escape" && (state.sheet || state.libOn || state.switchOn || state.dayOn || state.lift)) {
+    setState({ sheet: null, libOn: false, switchOn: false, dayOn: false, lift: null }, { persist: false });
   }
 });
 // A div role=button still has to answer the keyboard.

@@ -344,6 +344,7 @@ branch.
 | `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
 | `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
 | `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
+| `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
 
 ### Where a logged session lives
 
@@ -385,6 +386,15 @@ Three layers, and conflating them loses data:
 - **Loads come from the progression rule, never from the design.** The log sheet opens
   on `prescribe()`'s answer - deload, progress or hold - not on a round number and not
   on last week's weight. This is the one place the handoff was overruled.
+- **Today can run another day's session.** A skipped day is the normal case in a 7-day
+  week, so the Session tab has a day chip: pick any weekday and today runs THAT day's
+  lifts. It is session-scoped, like the reorder and the ad-hoc "+1 set" - `live.dayKey`,
+  never the plan. The sets still log under TODAY's real date, because that is when they
+  happened: a Monday session done on Tuesday reads as Monday unmet and chest logged on
+  Tuesday, which is the truth and what `adherence` should see. The kicker and the chip
+  both say so when the day is shifted. A lift with sets already logged today that the
+  chosen day does not contain still shows, or switching would hide sets about to be
+  written. Asserted by `tests/day_swap.mjs`.
 - **RIR is recorded, and its absence is explained.** A blank RIR can only ever produce
   "hold"; the sheet says so when you are at the rep ceiling with RIR blank. Never default
   RIR to a number the user did not press - that is fabricating the one field the
