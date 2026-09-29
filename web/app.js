@@ -61,7 +61,15 @@ const today = () => iso(new Date());
 const addDays = (s, n) => { const d = new Date(s + "T00:00:00"); d.setDate(d.getDate() + n); return iso(d); };
 const dayDiff = (a, b) => Math.round((new Date(a + "T00:00:00") - new Date(b + "T00:00:00")) / 864e5);
 const weekdayOf = (s) => JS_DAY[new Date(s + "T00:00:00").getDay()];
-const fmtDate = (s) => new Date(s + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+// The year is shown only when it is NOT the current one. Without that, the first point
+// of a two-year e1RM chart labelled "29 Sept" reads as today - which is exactly what a
+// long-horizon test turned up.
+const fmtDate = (s) => {
+  const d = new Date(s + "T00:00:00");
+  const opts = { day: "numeric", month: "short" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString("en-GB", opts);
+};
 
 // The NEXT date a weekday falls on, counting today as itself. The Plan tab edits a
 // repeating week, so the useful question is not "what was this week's Monday" - on a
@@ -257,7 +265,7 @@ const state = {
   reorder: false, sheet: null, w: 0, r: 8, rir: null, summaryOn: false, lift: null,
   libOn: false, query: "", newMuscle: "chest", switchOn: false, dayOn: false,
   renaming: null, draft: "", renameError: "",
-  openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null,
+  openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null, histShown: 60,
   lastSummary: null, armedDrop: null,
   cType: "Treadmill", cMin: "30", cKm: "0", cWhen: "visit", cDate: null, cLast: null,
 };
@@ -1012,7 +1020,7 @@ function renderHistory() {
       <button class="btn primary" data-act="copy-rows">Copy rows for log.csv</button>
       <pre id="rowsout" class="mono" hidden style="white-space:pre-wrap;word-break:break-all;font-size:10.5px;color:var(--color-neutral-400);background:var(--color-surface);padding:12px;border-radius:8px;max-height:240px;overflow:auto"></pre>
       <button class="btn ghost" data-act="export-store">Download as a file instead</button>` : ""}
-    ${all.length ? all.slice(0, 60).map((s) => {
+    ${all.length ? all.slice(0, state.histShown).map((s) => {
       const open = state.openSession === s.date;
       return `<div class="sessrow">
         <button class="sesshead" data-act="sess" data-v="${s.date}" aria-expanded="${open}">
@@ -1025,6 +1033,8 @@ function renderHistory() {
       </div>`;
     }).join("") : `<div class="empty"><b>No sessions yet.</b>
       Finish a session on the Session tab and it appears here immediately.</div>`}
+    ${all.length > state.histShown ? `<button class="btn" data-act="more-hist">
+      Show more · ${all.length - state.histShown} older session${all.length - state.histShown === 1 ? "" : "s"}</button>` : ""}
     <p class="foot">Tonnage is load × reps, bodyweight lifts at ${BW_KG} kg. Cardio is
       never counted here. <b>Copy rows for log.csv</b> puts them on the clipboard, ready to
       paste to Claude - no file needed. The download saves the same thing as JSON;
@@ -1616,6 +1626,7 @@ document.addEventListener("click", (e) => {
     case "new-plan": newPlan(v === "copy"); break;
     // history
     case "sess": setState({ openSession: state.openSession === v ? null : v }, { persist: false }); break;
+    case "more-hist": setState({ histShown: state.histShown + 120 }, { persist: false }); break;
     // overlays
     case "close-ov": setState({ sheet: null, lift: null, libOn: false, switchOn: false, dayOn: false, renaming: null }, { persist: false }); break;
     default: break;

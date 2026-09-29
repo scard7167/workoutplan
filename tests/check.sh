@@ -35,6 +35,9 @@ python3 tests/prescribe_diff.py /tmp/check_ref.txt /tmp/check_app.txt
 echo "--- RIR reaches the store and the next session progresses ---"
 node tests/rir_progression.mjs "$PORT" | tail -4
 
+echo "--- two years of sessions: nothing pruned, windows still compute ---"
+node tests/long_horizon.mjs "$PORT" | grep -E "seeded|header:|History:|show-more|after one tap|lift detail|ERRORS"
+
 echo "--- running another day's session today ---"
 node tests/day_swap.mjs "$PORT" | grep -E "a real shift|chip:|logged under date|plan untouched|ERRORS"
 

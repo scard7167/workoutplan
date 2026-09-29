@@ -345,6 +345,7 @@ branch.
 | `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
 | `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
 | `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
+| `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
 
 ### Where a logged session lives
 
@@ -361,6 +362,14 @@ Three layers, and conflating them loses data:
   `local only`. If BOTH stores refuse a write the banner says **nothing is saving**,
   because that is the one state the user must not discover later.
   Still one device until the Blob store exists.
+  **Nothing is ever pruned.** There is no sync window, no age cutoff and no session cap
+  in storage - `state.sessions` keeps every date and `allSets()` iterates all of them, so
+  the app's own trends are long-term by construction. Measured: two years of 7-day weeks
+  is 731 sessions, 14,208 sets and 418 cardio entries in **510 KB**, against a ~5 MB
+  localStorage budget and far more in IndexedDB. Any cap in the UI is a RENDER cap with a
+  way past it (History shows 60 and pages back), never a data cap.
+  **Show a year on any date that is not in the current year.** A two-year e1RM chart
+  labelled `29 Sept -> 29 Sept` reads as one day; `tests/long_horizon.mjs` found that.
 - **`/api/log` is the store of record.** One JSON document, GET and PUT. It is what
   makes the log survive a cleared cache and reach a second device. It needs
   `BLOB_READ_WRITE_TOKEN` in the Vercel project; until that exists the route answers
