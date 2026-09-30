@@ -36,6 +36,9 @@ node tests/long_horizon.mjs "$PORT" | grep -E "seeded|header:|History:|show-more
 echo "--- the app proposes no load: free entry, last session shown as reference ---"
 node tests/free_entry.mjs "$PORT"
 
+echo "--- a session logged but never finished survives the next day ---"
+node tests/unfinished_session.mjs "$PORT" | grep -E "kicker|banner|History  |storage"
+
 echo "--- running another day's session today ---"
 node tests/day_swap.mjs "$PORT" | grep -E "a real shift|chip:|logged under date|plan untouched|ERRORS"
 

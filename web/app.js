@@ -270,7 +270,7 @@ const state = {
   libOn: false, query: "", newMuscle: "chest", switchOn: false, dayOn: false,
   renaming: null, draft: "", renameError: "",
   openSession: null, kpiView: "Muscles", kpiBase: "4W", pbucket: null, histShown: 60,
-  lastSummary: null, armedDrop: null,
+  lastSummary: null, armedDrop: null, armStale: false,
   cType: "Treadmill", cMin: "30", cKm: "0", cWhen: "visit", cDate: null, cLast: null,
 };
 
@@ -278,8 +278,17 @@ const plansOf = () => state.plans[state.planKey] || { name: state.planKey, week:
 const weekOf = (pid) => (state.plans[pid] || { week: {} }).week;
 const liveDate = () => (state.live ? state.live.date : today());
 
+const staleLive = () => {
+  const L = state.live;
+  return L && L.date !== today() && sum(Object.values(L.logged || {}).map((v) => v.length)) > 0
+    ? L : null;
+};
+
 function ensureLive() {
   const d = today();
+  // A session from another day that has sets in it is NOT replaced - it is unfinished
+  // work, and the Session tab makes you resolve it. An empty one is just cleared.
+  if (staleLive()) return state.live;
   if (state.live && state.live.date !== d && !Object.keys(state.live.logged).length) state.live = null;
   if (!state.live) state.live = { date: d, plan: state.sessionPlanKey, logged: {}, extra: {}, order: null, rirBy: {}, dayKey: null };
   return state.live;
@@ -531,8 +540,19 @@ function renderSession() {
     </div>`;
   }).join("");
 
+  const stale = staleLive();
   $("p-Session").innerHTML = `
     ${storeBanner()}
+    ${stale ? `<div class="banner warn"><span class="tag warn">unfinished</span><div>
+      <b>${plural(sum(Object.values(stale.logged).map((v) => v.length)), "set")} from
+      ${esc(fmtDate(stale.date))} were never finished.</b> They are still here. Write them
+      to ${esc(fmtDate(stale.date))} where they belong, or discard them - today's session
+      cannot start until you choose, so nothing lands on the wrong date.
+      <span class="row2">
+        <button class="btn sm primary" data-act="finish">Finish ${esc(fmtDate(stale.date))}</button>
+        <button class="btn sm${state.armStale ? " primary" : ""}" data-act="drop-stale">${
+          state.armStale ? "Tap again to discard" : "Discard"}</button>
+      </span></div></div>` : ""}
     <div class="screenhead">
       <div>
         <div class="kicker">${fmtDate(L.date)} · ${esc(planName)}${
@@ -1503,6 +1523,14 @@ document.addEventListener("click", (e) => {
     }
     case "finish": finish(); break;
     case "close-summary": closeSummary(); break;
+    case "drop-stale": {
+      // Destructive, so it is armed: the first tap only asks.
+      if (!state.armStale) { setState({ armStale: true }, { persist: false }); break; }
+      state.armStale = false;
+      state.live = null;
+      setState({});
+      break;
+    }
     case "go-cardio": setState({ tab: "Cardio", cWhen: "visit" }, { persist: false }); break;
     // log sheet
     case "w": {
@@ -1648,7 +1676,11 @@ function hydrate(doc) {
   if (doc.custom) state.custom = { ...state.custom, ...doc.custom };
   if (doc.planKey && state.plans[doc.planKey]) state.planKey = doc.planKey;
   if (doc.sessionPlanKey && state.plans[doc.sessionPlanKey]) state.sessionPlanKey = doc.sessionPlanKey;
-  if (doc.live && doc.live.date === today()) state.live = doc.live;
+  // Restored whatever its date. This used to be `=== today()`, which SILENTLY DISCARDED
+  // a session logged yesterday and never finished - and the next persist() wrote the
+  // empty replacement over it in both stores. Sets that reach disk must never be dropped
+  // by a load.
+  if (doc.live) state.live = doc.live;
 }
 
 async function boot() {

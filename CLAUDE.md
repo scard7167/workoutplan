@@ -356,6 +356,7 @@ branch.
 | `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
 | `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
 | `tests/free_entry.mjs` | the app proposes no load: empty box, last session shown as reference |
+| `tests/unfinished_session.mjs` | a session logged but never finished survives the next day and lands on its own date |
 
 ### Where a logged session lives
 
@@ -397,6 +398,15 @@ Three layers, and conflating them loses data:
 - **One render entry point: `renderAll()`.** Every mutation goes through `setState()`,
   which persists and re-renders everything. Two tabs reading one state at different
   moments is how Plan and Today came to disagree in the previous app.
+- **A live session is NEVER dropped by a load, whatever its date.** `hydrate()` restored
+  `live` only when `doc.live.date === today()`, so sets logged and not Finished were
+  silently discarded the next morning - and the empty replacement was then persisted over
+  them in BOTH stores. That is destruction of data already on disk, and it was reported
+  as "my logged workout from yesterday is missing". Now: `live` is restored whatever its
+  date; a stale one WITH sets holds the Session tab on its own date behind a loud banner
+  offering **Finish** (writes under that date, not today) or **Discard** (armed, two
+  taps); an empty one is still just cleared. Today's session cannot start until it is
+  resolved, so nothing lands on the wrong date. Asserted by `tests/unfinished_session.mjs`.
 - **Finishing a session must be idempotent.** `finish()` moves the sets out of the live
   session and into `sessions` in the same breath and renders the summary from its own
   snapshot. Pressing Finish twice must never log the session twice.

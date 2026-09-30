@@ -423,3 +423,9 @@ svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
 .lastbox { border-radius: 8px; background: var(--color-surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .lastbox .sets { font: 500 14px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text); }
 .lastbox .sets i { font-style: normal; color: var(--color-neutral-500); }
+
+/* An unfinished session from another day. Loud on purpose: it used to be discarded
+   silently on the next day's load, which destroyed sets that were already on disk. */
+.banner.warn { box-shadow: 0 0 0 1px var(--color-accent); }
+.banner .row2 { display: flex; gap: 8px; margin-top: 10px; }
+.banner .row2 .btn { width: auto; flex: 1; }
