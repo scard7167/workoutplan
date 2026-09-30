@@ -27,22 +27,14 @@ python3 tests/cardio_isolation.py
 sleep 2
 trap 'kill "$(cat /tmp/check_srv.pid)" 2>/dev/null || true' EXIT
 
-echo "--- the progression rule: app vs analyze.py, 12 cases ---"
-python3 tests/prescribe_ref.py > /tmp/check_ref.txt
-node tests/prescribe_app.mjs "$PORT" > /tmp/check_app.txt 2>&1
-python3 tests/prescribe_diff.py /tmp/check_ref.txt /tmp/check_app.txt
-
-echo "--- RIR reaches the store and the next session progresses ---"
-node tests/rir_progression.mjs "$PORT" | tail -4
+echo "--- analyze.py's progression rule still answers (the CLI keeps it; the app does not) ---"
+python3 tests/prescribe_ref.py
 
 echo "--- two years of sessions: nothing pruned, windows still compute ---"
 node tests/long_horizon.mjs "$PORT" | grep -E "seeded|header:|History:|show-more|after one tap|lift detail|ERRORS"
 
-echo "--- an invented lift is loggable on the 5 kg default, and says it is assumed ---"
-node tests/needs_setup.mjs "$PORT" | grep -E "assumed|tap to log|after logging|ERRORS"
-
-echo "--- the 5 kg default drives every branch of the rule ---"
-node tests/default_increment.mjs "$PORT"
+echo "--- the app proposes no load: free entry, last session shown as reference ---"
+node tests/free_entry.mjs "$PORT"
 
 echo "--- running another day's session today ---"
 node tests/day_swap.mjs "$PORT" | grep -E "a real shift|chip:|logged under date|plan untouched|ERRORS"

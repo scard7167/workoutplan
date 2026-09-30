@@ -416,3 +416,10 @@ svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
 .rirrow .label { flex: none; }
 .rirrow .pills { flex: 1; flex-wrap: nowrap; justify-content: space-between; }
 .rirrow .pill { min-width: 42px; min-height: 44px; justify-content: center; padding: 7px 0; }
+
+/* Last time's actual sets, in the log sheet. This is the reference the app exists to
+   give - what you did - and it replaced a proposed load, which the user did not want:
+   the intelligence is in the tracking, not in telling you what to lift. */
+.lastbox { border-radius: 8px; background: var(--color-surface); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.lastbox .sets { font: 500 14px/1.4 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--color-text); }
+.lastbox .sets i { font-style: normal; color: var(--color-neutral-500); }

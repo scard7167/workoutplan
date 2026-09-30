@@ -14,12 +14,9 @@ import { EXERCISES, PLANS, ACTIVE_PLAN, SEED_LOG, PROGRESSION, BUILD } from "./d
 /* ------------------------------------------------------------------ constants */
 
 const BW_KG = 78;                    // handoff: bodyweight lifts carry 78 kg. A setting one day.
-// A lift the app invents used to be inert until a real increment reached exercises.yaml,
-// because a guessed increment is silent and permanent. On 2026-09-30 the user set 5 kg as
-// the standing assumption for every new lift, having been shown that cost. So a new lift
-// is loggable immediately - but the assumption is LABELLED wherever the lift appears and
-// exported as ASSUMED, so it stays correctable rather than hardening into fact.
-const DEFAULT_INCREMENT = 5;
+// The app proposes no load, so it needs no increment: `increment` and `rep_range` exist
+// only for `analyze.py`, which still has a progression rule. A lift the app invents
+// therefore needs neither, and nothing about it is assumed.
 const DEFAULT_REP_RANGE = [8, 12];
 const CARDIO_GOAL = 3;               // sessions a week, Mon-Sun
 const NOISE = 2.5;                   // % - anything inside this is "flat", never up or down
@@ -98,19 +95,7 @@ const disp = (ex) => ex.replace(/_/g, " ");
 const primeOf = (ex) => (EXERCISES[ex] ? EXERCISES[ex].muscles[0] : (state.custom[ex] || {}).muscle || null);
 const groupOf = (ex) => TO_GROUP[primeOf(ex)] || null;
 const isBW = (ex) => !!(EXERCISES[ex] && EXERCISES[ex].bodyweight);
-function libOf(ex) {
-  if (EXERCISES[ex]) return EXERCISES[ex];
-  const c = state.custom[ex];
-  if (!c) return null;
-  // Applied at READ time, not written into state: a lift created before the default
-  // existed gets it too, and a real value pasted into exercises.yaml always wins.
-  return {
-    ...c,
-    increment: c.increment == null ? DEFAULT_INCREMENT : c.increment,
-    rep_range: c.rep_range || DEFAULT_REP_RANGE,
-    assumed: c.increment == null,
-  };
-}
+const libOf = (ex) => EXERCISES[ex] || state.custom[ex] || null;
 const initials = (ex) => disp(ex).split(" ").map((w) => w[0]).slice(0, 2).join("");
 
 const sgn = (v) => (v > 0 ? "+" : v < 0 ? "−" : "±");
@@ -416,46 +401,7 @@ function kpiView() {
   return { last, ex };
 }
 
-// The double-progression rule. The ONE load source in the app.
-//
-// `analyze.py prescribe()` is the referee and this must agree with it EXACTLY, so the
-// thresholds come from config.yaml via PROGRESSION rather than being written twice, and
-// every branch below mirrors a numbered rule in that docstring. A null `w` means "no
-// baseline": the rule refuses to invent a starting load, and so must this - an empty
-// log.csv would otherwise open every lift at 0 kg and log zeros.
-function prescribe(ex) {
-  const lib = libOf(ex);
-  if (!lib) return { needs: true, w: null, r: 8 };
-  const [floor, ceil] = lib.rep_range;
-  const inc = lib.increment;
-  const hist = allSets().filter((s) => s.ex === ex);
-  if (!hist.length) return { w: null, r: floor, why: "no baseline" };
-  const lastDate = hist[hist.length - 1].date;
-  const lastSets = hist.filter((s) => s.date === lastDate);
-  // Rule 6: a mid-session load change carries the LAST set's load forward, not the first.
-  const w = lastSets[lastSets.length - 1].w;
 
-  // Rule 2, checked first.
-  if (lastSets.some((s) => s.reps < floor && s.rir === 0)) {
-    // Rule 5: a bodyweight lift cannot go below 0 - hold and cut the rep target.
-    if (w === 0) return { w: 0, r: Math.max(1, floor - 2), why: "deload floor" };
-    const dropped = roundDownTo(w * (1 - PROGRESSION.deload_pct), inc);
-    return { w: dropped, r: floor, why: "deload" };
-  }
-  // Rule 3. A blank RIR does not qualify - unverified is not proven.
-  if (lastSets.every((s) => s.reps >= ceil && s.rir != null && s.rir <= PROGRESSION.rir_ceiling)) {
-    return { w: +(w + inc).toFixed(4), r: floor, why: "progress" };
-  }
-  // Rule 4.
-  const best = Math.max(...lastSets.map((s) => s.reps));
-  return { w, r: Math.min(ceil, best + 1), why: "hold" };
-}
-
-// analyze.py's round_down, epsilon and all: round(floor((kg + 1e-9) / inc) * inc, 4).
-function roundDownTo(kg, inc) {
-  if (!inc) return kg;
-  return +(Math.floor((kg + 1e-9) / inc) * inc).toFixed(4);
-}
 
 /* ------------------------------------------------------ effective day / session */
 
@@ -482,10 +428,7 @@ function sessionLifts() {
       sets: sets + (L.extra[ex] || 0),
       top: top ? `${top.w} × ${top.reps}` : null,
       done: (L.logged[ex] || []).length,
-      // Not blocked any more - 5 kg is the standing default - but an ASSUMED increment
-      // is still said out loud on the row, because a silent one is the whole risk.
       needs: !lib,
-      assumed: !!(lib && lib.assumed),
     };
   });
   // Anything already logged today that this day's plan does not contain still shows,
@@ -582,9 +525,8 @@ function renderSession() {
         <button class="step" data-act="move" data-ex="${esc(l.ex)}" data-dir="1" ${i === lifts.length - 1 ? "disabled" : ""} aria-label="move down"><span>▼</span></button>
       </span>` : `<span class="rt">
         <span class="n">${l.done}/${l.sets}</span>
-        <span class="st${extra > 0 ? " extra" : ""}${l.needs || l.assumed ? " needs" : ""}">${
-          l.needs ? "needs setup" : l.assumed ? "5 kg assumed"
-            : extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
+        <span class="st${extra > 0 ? " extra" : ""}${l.needs ? " needs" : ""}">${
+          l.needs ? "not in library" : extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
       </span>`}
     </div>`;
   }).join("");
@@ -956,10 +898,10 @@ function renderPlan() {
   const armed = (i) => state.armedDrop === `${state.day}:${i}`;
   const rows = dayLifts.map(([ex, s], i) => {
     const prov = !EXERCISES[ex];
-    const needs = prov && (libOf(ex) || {}).assumed;
+
     return `<div class="planrow">
       <span class="mid"><span class="nm">${esc(disp(ex))}</span>
-        ${prov ? `<span class="tag${needs ? " warn" : ""}">${needs ? "5 kg assumed" : "new"}</span>` : ""}
+        ${prov ? `<span class="tag">new</span>` : ""}
         <span class="sub${live ? " live" : ""}">${esc(disp(primeOf(ex) || "custom"))}${live ? " · drives today" : ""}</span></span>
       <button class="step" data-act="sets" data-i="${i}" data-d="-1" aria-label="one set fewer"><span>−</span></button>
       <span class="v">${s}</span>
@@ -1083,21 +1025,6 @@ function renderOverlay() {
   o.innerHTML = "";
 }
 
-// RIR is the field that decides whether a load can ever go UP: rule 3 needs a verified
-// RIR <= rir_ceiling and a blank one does not qualify - "unverified is not proven". The
-// handoff's sheet had no RIR control at all, so every logged set was blank and the
-// progress branch could never fire: reps would climb to the ceiling and the weight would
-// never move again. This says so at the moment of logging rather than letting the user
-// discover it over a month of unchanged loads.
-function rirWarning(ex, lib) {
-  if (!lib || state.rir != null) return "";
-  const ceil = lib.rep_range[1];
-  if (state.r < ceil) return "";
-  return `<div class="banner"><span class="tag">holds</span><div>
-    <b>Blank RIR holds the load.</b> You are at the ${ceil}-rep ceiling, but the rule
-    only adds weight on a verified RIR ≤ ${PROGRESSION.rir_ceiling}. Tap one and the next
-    session steps up.</div></div>`;
-}
 
 function sheetHtml() {
   const ex = state.sheet, L = ensureLive();
@@ -1105,21 +1032,26 @@ function sheetHtml() {
   const done = L.logged[ex] || [];
   const lib = libOf(ex);
   const needs = !lib;
-  const p = prescribe(ex);
+  // Last session's sets for this lift, in full. This is the REFERENCE the app exists to
+  // give - what you actually did - not a proposal. The weight box stays empty and yours.
+  const prev = bySession(allSets().filter((x) => x.date < L.date))[ex];
+  const last = prev ? prev.series[prev.series.length - 1] : null;
+  const lastSets = last ? allSets().filter((x) => x.ex === ex && x.date === last.date) : [];
   return `<div class="sheet" role="dialog" aria-modal="true">
     <span class="handle"></span>
     <div class="sheethead">
       <div><h2>${esc(disp(ex))}</h2>
-        <div class="sub">${esc(disp(primeOf(ex) || "custom"))} · target ${plural(lift.sets, "set")} · last ${lift.top ? esc(lift.top) : "—"}</div></div>
+        <div class="sub">${esc(disp(primeOf(ex) || "custom"))} · target ${plural(lift.sets, "set")}</div></div>
       <button class="closebtn" data-act="close-ov">Close</button>
     </div>
     ${needs ? `<div class="banner"><span class="tag">unknown lift</span><div>
       <b>This lift is not in the library.</b> Add it on the Plan tab before logging it.
       </div></div>` : `
-    ${lib.assumed ? `<div class="banner"><span class="tag">assumed</span><div>
-      <b>Stepping this lift in 5 kg.</b> That is the standing default for a lift you
-      added, not a value read off the machine. If the stack moves in 2.5, tell Claude and
-      it goes in <code>exercises.yaml</code> properly.</div></div>` : ""}
+    ${lastSets.length ? `<div class="lastbox">
+      <span class="label">Last time · ${esc(fmtDate(last.date))}</span>
+      <span class="sets mono">${lastSets.map((x) =>
+        `${x.w}×${x.reps}${x.rir == null ? "" : `<i>@${x.rir}</i>`}`).join("   ")}</span>
+    </div>` : `<p class="meta">First time logging this lift.</p>`}
     <div class="grid2">
       <div class="stepper"><span class="label">Weight · kg</span><div class="row">
         <button class="step" data-act="w" data-d="-2.5" aria-label="less"><span>−</span></button>
@@ -1138,12 +1070,8 @@ function sheetHtml() {
         <button class="pill" data-act="rir" data-v="" aria-pressed="${state.rir == null}">—</button>
       </div>
     </div>
-    <p class="meta" style="margin:-4px 0 0">${state.w == null
-      ? `No prior session, so the rule gives no load - it never invents a starting one. Type the weight you are using; target ${state.r} reps.`
-      : `${{ deload: "Deload: ", "deload floor": "Deload, and already at bodyweight, so the rep target drops instead: ",
-              progress: "Progress: ", "no baseline": "" }[p.why] || ""}the rule asks ${
-              p.w === 0 && isBW(ex) ? "bodyweight" : `${p.w} kg`} × ${p.r}. Steppers move 2.5 kg and 1 rep; tap a number to type it.`}</p>
-    ${rirWarning(ex, lib)}`}
+    <p class="meta" style="margin:-4px 0 0">Type the weight you are actually using. Steppers
+      move 2.5 kg and 1 rep. RIR feeds e1RM and the hard-set count.</p>`}
     ${done.length ? `<div class="setlist">${done.map((v, i) =>
       `<div class="r"><span class="k">set ${i + 1}</span><span class="v">${v.w} × ${v.r}${v.rir == null ? "" : ` @${v.rir}`}</span></div>`).join("")}</div>` : ""}
     <div style="display:flex;gap:9px">
@@ -1244,10 +1172,9 @@ function libHtml() {
       : q ? `<p class="meta">No lift in your library or plans matches.</p>` : ""}
     ${q && !exact ? `<div class="card">
       <span class="label">New lift</span>
-      <p class="body" style="margin:0">A lift the app invents gets a <b>5 kg increment and
-        an 8-12 rep range</b> so you can log it straight away. Both are assumptions, labelled
-        as such until real values reach <code>exercises.yaml</code> - tell Claude the real
-        step and it becomes permanent.</p>
+      <p class="body" style="margin:0">A lift you add here is loggable straight away - the
+        app proposes no load, so there is nothing to set up first. Export it into
+        <code>exercises.yaml</code> when you want <code>analyze.py</code> to see it too.</p>
       <div class="pills">${MUSCLE_PILLS.map((m) =>
         `<button class="pill" data-act="new-muscle" data-v="${m}" aria-pressed="${state.newMuscle === m}">${esc(disp(m))}</button>`).join("")}</div>
       <button class="btn primary" data-act="create-lift">Add “${esc(state.query.trim())}” as a new lift</button>
@@ -1316,7 +1243,6 @@ function liftHtml() {
     regressing: "Falling. Check recovery and volume before pushing load again.",
   }[row.status] || "Not enough sessions in this window to call it.";
   const best = sets.reduce((a, b) => (b.e1 > a.e1 ? b : a), sets[0]);
-  const p = prescribe(ex);
 
   return `<div class="full" role="dialog" aria-modal="true">
     <div class="sheethead">
@@ -1336,10 +1262,6 @@ function liftHtml() {
     </div>
     <div class="nextrow"><span class="tag${row.status === "progressing" ? " on" : ""}">${esc(row.status || "no call")}</span>
       <span class="t">${esc(call)}</span></div>
-    <div class="nextrow"><span class="tag">next</span>
-      <span class="t">${p.w == null
-        ? `No prior session, so the rule gives no load - target ${p.r} reps at a weight you choose.`
-        : `The rule prescribes <b>${p.w} kg × ${p.r}</b>${p.why ? ` (${p.why})` : ""}.`}</span></div>
   </div>`;
 }
 
@@ -1433,14 +1355,13 @@ function logSet() {
 }
 
 function openSheet(ex) {
-  const p = prescribe(ex);
   const L = ensureLive();
   const already = (L.logged[ex] || []);
-  // The rule refuses to invent a starting load, so a lift with no history opens EMPTY -
-  // except a bodyweight lift, where 0 added load is the real bar, not a guess.
-  const seed = already.length ? already[already.length - 1]
-    : { w: p.w == null && isBW(ex) ? 0 : p.w, r: p.r };
-  const hist = allSets().filter((s) => s.ex === ex);
+  // Within a session, set 2 opens on set 1's numbers - that is not proposing a load, it
+  // is not making you retype what you just entered. The FIRST set of a lift opens empty:
+  // the app does not tell you what to lift.
+  const seed = already.length ? already[already.length - 1] : { w: null, r: 8 };
+  const hist = allSets().filter((x) => x.ex === ex);
   const rir = already.length ? already[already.length - 1].rir
     : (L.rirBy || {})[ex] !== undefined ? L.rirBy[ex]
     : hist.length ? hist[hist.length - 1].rir : null;
@@ -1536,11 +1457,13 @@ function exportYaml() {
   const provisional = Object.keys(state.custom);
   const head = provisional.length
     ? "# These lifts are not in exercises.yaml yet. Paste them in first.\n" +
-      "# increment 5 is ASSUMED, not read off the machine - correct any that differ.\n" +
+      "# The app proposes no load, so it never needed an increment and none is claimed\n" +
+      "# here. analyze.py's own progression rule does - fill it in from the machine if\n" +
+      "# you want the CLI to prescribe, or leave it out.\n" +
       provisional.map((n) => {
         const c = libOf(n) || {};
-        return `#   ${n}: {muscles: [${c.muscle}], increment: ${c.increment}` +
-          `${c.assumed ? "   # ASSUMED" : ""}, rep_range: [${(c.rep_range || DEFAULT_REP_RANGE).join(", ")}]}\n`;
+        return `#   ${n}: {muscles: [${c.muscle}], increment: ?, ` +
+          `rep_range: [${(c.rep_range || DEFAULT_REP_RANGE).join(", ")}]}\n`;
       }).join("") + "\n"
     : "";
   const el = $("yamlout");
@@ -1583,7 +1506,7 @@ document.addEventListener("click", (e) => {
     case "go-cardio": setState({ tab: "Cardio", cWhen: "visit" }, { persist: false }); break;
     // log sheet
     case "w": {
-      const inc = (libOf(state.sheet) || {}).increment || 2.5;
+      const inc = 2.5;                 // the stepper's own step; no library value is read
       const base = state.w == null ? (num(t.dataset.d) > 0 ? inc - num(t.dataset.d) : null) : state.w;
       if (base == null) break;
       setState({ w: Math.max(0, +(base + num(t.dataset.d)).toFixed(2)) }, { persist: false });

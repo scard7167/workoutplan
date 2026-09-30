@@ -125,7 +125,18 @@ and pasted back) requires asking first if it removes a muscle's only lift - the 
 bar as adding an exercise to the library. A lift the Plan tab invented is *provisional*
 until that paste happens - see **The web app**.
 
-## Progression rule - the only source of load prescriptions
+## Progression rule - `analyze.py` only, since 2026-09-30
+
+**The web app proposes no load at all.** Asked why an increment had to be predefined,
+the user's answer was the right one: *"keep it free entry only. No need to propose
+weight. The intelligence is in progression tracking and load analysis, not the
+proposal."* So the rule below is `analyze.py`'s, for the CLI. It does not run in `web/`,
+and the 5 kg default that existed for one day is gone with it - nothing is assumed
+because nothing needs an increment.
+
+What the app does instead, which is the whole point: the log sheet shows **last session's
+actual sets for that lift, RIR and all**, and leaves the weight box empty and yours. See
+"Free entry" under The web app.
 
 Double progression, per exercise, using its `rep_range: [floor, ceiling]` and `increment`
 from `exercises.yaml` and the thresholds in `config.yaml`:
@@ -154,6 +165,9 @@ and it says out loud when a blank RIR at the ceiling is what is holding the load
 No load ever comes from anywhere else. Not from feel, not from a round number, not from
 what the plates suggest. If the rule produces 62.5 kg, the prescription is 62.5 kg.
 
+This rule is the CLI's. Nothing in `web/` implements it, so the twelve-case app-vs-CLI
+cross-check was retired with it - there is no second copy left to disagree.
+
 `analyze.py prescribe()` is the programmatic statement of this rule and **is built** -
 `python3 analyze.py prescribe --exercise NAME [--log FILE]`. It is the referee: anything
 else that produces a load must agree with it exactly, including the two rules that are
@@ -161,21 +175,17 @@ easy to miss. **A mid-session load change carries the LAST set's load forward**,
 first. **A lift with no prior session gets NO load** - the rule never invents a starting
 one, and neither may any caller.
 
-`web/app.js` carries a second copy, because the phone has no Python. It is checked
-against the referee over twelve cases covering every branch - no baseline, hold, progress,
-blank RIR, deload, deload rounding, mid-session change, bodyweight hold, bodyweight
-progress, bodyweight deload floor, a 15-rep ceiling and RIR above the ceiling - by
-seeding the same history into the app and reading the load off the log sheet. All twelve
-agree. Re-run that check after touching either copy; four of the twelve failed the first
-time it was run:
+`web/app.js` used to carry a second copy and was checked against this one over twelve
+cases. Both are gone as of 2026-09-30: the app proposes no load, so there is no second
+copy to drift. `tests/prescribe_ref.py` still runs this rule over those twelve cases, as
+a check on the CLI alone.
 
     PW_ROOT=/tmp/pw sh tests/check.sh
 
-That runs everything a syntax pass cannot: the module parse, the loader, the twelve-case
-comparison (`tests/prescribe_diff.py`, which EXITS NON-ZERO on a mismatch rather than
-leaving two lists to eyeball), and the RIR chain. Playwright is deliberately NOT in
-`web/package.json` - that file is what Vercel installs - so install it anywhere
-(`npm i --prefix /tmp/pw playwright`) and point `PW_ROOT` at it.
+That runs everything a syntax pass cannot: the module parse, the loader, the CLI rule,
+free entry, cardio isolation, the day swap, local durability and two years of history.
+Playwright is deliberately NOT in `web/package.json` - that file is what Vercel installs -
+so install it anywhere (`npm i --prefix /tmp/pw playwright`) and point `PW_ROOT` at it.
 
 ## Session protocol
 
@@ -341,13 +351,11 @@ branch.
 | `web/manifest.webmanifest`, `icon*.png/svg` | installs to the phone home screen |
 | `tests/check.sh` | every check a syntax pass cannot do. Run it before pushing `web/` or `analyze.py` |
 | `tests/cardio_isolation.py` | cardio reaches `log.csv`, and asserts it cannot reach a strength number |
-| `tests/prescribe_*` | the twelve-case cross-check between `analyze.py`'s rule and the app's copy |
-| `tests/rir_progression.mjs` | asserts RIR reaches the store and the next session actually progresses |
+| `tests/prescribe_*` | twelve cases over `analyze.py`'s progression rule (the CLI's; the app has none) |
 | `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
 | `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
 | `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
-| `tests/needs_setup.mjs` | an invented lift is loggable on the 5 kg default, and labelled as assumed |
-| `tests/default_increment.mjs` | the 5 kg default across every branch of the progression rule |
+| `tests/free_entry.mjs` | the app proposes no load: empty box, last session shown as reference |
 
 ### Where a logged session lives
 
@@ -394,9 +402,12 @@ Three layers, and conflating them loses data:
   snapshot. Pressing Finish twice must never log the session twice.
 - **The baseline is read BEFORE the session joins the log**, or every lift measures
   itself against the sets just logged and every delta reads "held".
-- **Loads come from the progression rule, never from the design.** The log sheet opens
-  on `prescribe()`'s answer - deload, progress or hold - not on a round number and not
-  on last week's weight. This is the one place the handoff was overruled.
+- **Free entry: the app proposes no load.** The weight box opens EMPTY on the first set
+  of a lift and takes any number you type. In its place the sheet shows **last session's
+  actual sets for that lift**, RIR and all - the reference, not a proposal. Within a
+  session set 2 opens on set 1's numbers, which is not proposing a load, it is not making
+  you retype what you just entered. Do not reintroduce a suggested weight, from a rule or
+  from last week's number: it was removed on purpose.
 - **Today can run another day's session.** A skipped day is the normal case in a 7-day
   week, so the Session tab has a day chip: pick any weekday and today runs THAT day's
   lifts. It is session-scoped, like the reorder and the ad-hoc "+1 set" - `live.dayKey`,
@@ -406,18 +417,16 @@ Three layers, and conflating them loses data:
   both say so when the day is shifted. A lift with sets already logged today that the
   chosen day does not contain still shows, or switching would hide sets about to be
   written. Asserted by `tests/day_swap.mjs`.
-- **RIR is recorded, and its absence is explained.** A blank RIR can only ever produce
-  "hold"; the sheet says so when you are at the rep ceiling with RIR blank. Never default
-  RIR to a number the user did not press - that is fabricating the one field the
-  progression rule trusts.
-- **A provisional lift cannot be logged, and says so EARLY.** No `increment` means no
-  prescription: the weight box is disabled and the sheet says `needs setup`.
-  **`increment` is never guessed**, and `Export routine.yaml` emits a commented stub
-  rather than a value. The Session ROW says `needs setup` too, instead of "tap to log" -
-  reported after tapping a lift mid-session and only then being told it could not be
-  logged. And the Plan tab's tag sits BESIDE the name, never inside `.nm`, which
-  truncates with an ellipsis and was swallowing the tag on any long lift name.
-  Asserted by `tests/needs_setup.mjs`.
+- **RIR is recorded, and never defaulted.** It feeds e1RM and the hard-set count, which
+  is why it is still captured now the app proposes nothing. It is sticky per lift - one
+  tap per exercise, not per set. Never default it to a number the user did not press.
+- **A lift you add is loggable immediately.** Nothing has to be set up first, because
+  nothing is prescribed. Only a lift that is in neither the library nor `state.custom` is
+  refused, and the Session row says `not in library` rather than waiting until you tap
+  it. The Plan tab's `new` tag sits BESIDE the name, never inside `.nm`, which truncates
+  with an ellipsis and was swallowing it on any long lift name.
+  `Export routine.yaml` emits a stub with `increment: ?` - it claims nothing, and says
+  the value is only needed if you want `analyze.py` to prescribe.
 - **The Plan day strip shows DATES, and the set count carries its unit.** It first
   shipped as a weekday over the week's set count - `MON 24 / TUE 28 / WED 24` - and was
   reported as "the dates are random", correctly: two digits under a weekday name is read
@@ -469,40 +478,27 @@ Fixing it means choosing a plausible start load for 16 machines. Those are demo 
 and not prescriptions, so the "never guess an increment" rule does not bite - but they
 are still invented, so ask before adding them rather than filling the table in quietly.
 
-## The 5 kg increment default - 2026-09-30
+## Free entry - 2026-09-30
 
-A lift the app invents used to be inert: no `increment`, so no prescription and no
-logging until a real value reached `exercises.yaml`. That is what "never guess an
-increment" bought, and the cost showed up at 05:06 in a gym, four lifts into a session,
-with nothing loggable. The user then set the rule: **assume 5 kg for every exercise
-added in future** - having been told the consequence in the same breath.
+The app proposed a load for one day, and briefly did it by assuming a 5 kg increment for
+any lift the app invented. Both are gone. The sequence is worth keeping because the
+reasoning is:
 
-The consequence, so it is not lost: 5 kg is wrong on any stack that moves in 2.5, and a
-wrong increment is silent. The rule will step that machine twice as fast as it should
-and nothing will flag it; it shows up only as loads that feel wrong. That is now an
-accepted, recorded trade, not an oversight.
+1. A lift the app invented had no `increment`, so it could not be prescribed for, so it
+   could not be logged. That bill arrived at 05:06 in a gym, four lifts into a session.
+2. The stopgap was a 5 kg default, labelled `assumed` everywhere it appeared.
+3. Then the real question: **why does the app need to propose a weight at all?**
+   It does not. Logging was ALWAYS free entry - `#s-w` is a plain decimal input and the
+   steppers move a flat 2.5 kg. `increment` only ever decided how much the rule ADDED on
+   a progression. Remove the proposal and the increment, the default, the assumption
+   labels and the app-vs-CLI cross-check all become unnecessary at once.
 
-So `DEFAULT_INCREMENT = 5` and `DEFAULT_REP_RANGE = [8, 12]` in `web/app.js`, applied in
-`libOf()` at READ time rather than written into state - a lift created before the default
-existed gets it too, and a real value in `exercises.yaml` always wins.
+So: **the weight box opens empty, and last session's real sets are shown instead.** The
+value of this app is the tracking and the analysis, not telling you what to lift.
 
-**The assumption is labelled everywhere the lift appears**, which is what keeps it
-correctable instead of hardening into fact:
-
-- Session row: `5 kg assumed` where a library lift says `tap to log`
-- Plan row: a `5 kg assumed` tag, beside the name so truncation cannot eat it
-- Log sheet: a banner saying it is the default, not a value read off the machine
-- `Export routine.yaml`: the stub carries `increment: 5   # ASSUMED`
-
-An unknown lift - one not in the library and not in `state.custom` - is still refused
-outright; `needs` now means that, not a missing increment.
-
-Verified across every branch of the rule with a 5 kg increment: ceiling at RIR 1 goes
-35 -> 40, hold goes 35 x 10 -> 35 x 11, below floor at RIR 0 goes 35 -> 30.
-
-**The debt this joins.** 21 gym80 machines already carry `increment: 5   # UNVERIFIED`
-in `exercises.yaml`. Those are written into the repo, so they read as claims that someone
-checked. They were not. Offer to correct them whenever a real plate reading turns up.
+Still true: 21 gym80 machines carry `increment: 5   # UNVERIFIED` in `exercises.yaml`.
+They now affect only `analyze.py prescribe()`, and nothing in the app. Correct them if
+the CLI's prescription ever matters; otherwise they are inert.
 
 ## Cardio - recorded, not yet trusted
 
@@ -547,18 +543,14 @@ now quads are trained directly.
 
 - `log.csv` history is **immutable**. Corrections are stated out loud, one row at a time,
   and never made silently or in bulk.
-- Never prescribe a load the progression rule does not produce.
+- Never prescribe a load the progression rule does not produce - and in `web/`, never
+  prescribe one at all. Free entry was chosen deliberately; see the Progression rule.
 - Never add an exercise to `exercises.yaml`, or remove a muscle's only routine lift,
   without asking first. A provisional lift in the web app is not an exception - it is
   what asking looks like when there is no repo to hand.
-- **`increment` has a standing default of 5 kg, set by the user on 2026-09-30** - see
-  "The 5 kg increment default" below. It replaces the old absolute ("never guess an
-  increment; read it off the machine or leave it blank"), which blocked logging.
-  What survives unchanged: an assumed increment is **never silent**. It is labelled on
-  the Session row, on the Plan row and in the log sheet, and exported as `# ASSUMED`.
-  Still never invent a REP RANGE floor or a prime mover for a lift someone has to trust,
-  and never guess an increment in `exercises.yaml` itself - a value written to the repo
-  is a claim it was read.
+- **Never guess an `increment` in `exercises.yaml`** - a value written to the repo is a
+  claim someone read it off the machine. The app no longer needs one at all, so there is
+  nothing to unblock by guessing. `increment` now matters only to `analyze.py`.
 - If a metric is not built, **say so**. Never compute it ad hoc from the CSV - and if a
   new metric is added, it goes in `analyze.py` first, never only in `web/app.js`.
   Since the handoff override the web app recomputes its OWN metrics from the set log by
