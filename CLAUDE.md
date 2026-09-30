@@ -346,6 +346,7 @@ branch.
 | `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
 | `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
 | `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
+| `tests/needs_setup.mjs` | a lift with no increment says so on the row, and the tag survives a long name |
 
 ### Where a logged session lives
 
@@ -408,9 +409,14 @@ Three layers, and conflating them loses data:
   "hold"; the sheet says so when you are at the rep ceiling with RIR blank. Never default
   RIR to a number the user did not press - that is fabricating the one field the
   progression rule trusts.
-- **A provisional lift cannot be logged.** No `increment` means no prescription: the
-  weight boxes are disabled and the sheet says `needs setup`. **`increment` is never
-  guessed**, and `Export routine.yaml` emits a commented stub rather than a value.
+- **A provisional lift cannot be logged, and says so EARLY.** No `increment` means no
+  prescription: the weight box is disabled and the sheet says `needs setup`.
+  **`increment` is never guessed**, and `Export routine.yaml` emits a commented stub
+  rather than a value. The Session ROW says `needs setup` too, instead of "tap to log" -
+  reported after tapping a lift mid-session and only then being told it could not be
+  logged. And the Plan tab's tag sits BESIDE the name, never inside `.nm`, which
+  truncates with an ellipsis and was swallowing the tag on any long lift name.
+  Asserted by `tests/needs_setup.mjs`.
 - **The Plan day strip shows DATES, and the set count carries its unit.** It first
   shipped as a weekday over the week's set count - `MON 24 / TUE 28 / WED 24` - and was
   reported as "the dates are random", correctly: two digits under a weekday name is read

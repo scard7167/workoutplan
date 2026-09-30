@@ -38,6 +38,9 @@ node tests/rir_progression.mjs "$PORT" | tail -4
 echo "--- two years of sessions: nothing pruned, windows still compute ---"
 node tests/long_horizon.mjs "$PORT" | grep -E "seeded|header:|History:|show-more|after one tap|lift detail|ERRORS"
 
+echo "--- a lift with no increment says so on the row, not after the tap ---"
+node tests/needs_setup.mjs "$PORT" | grep -E "needs setup|tap to log|ERRORS"
+
 echo "--- running another day's session today ---"
 node tests/day_swap.mjs "$PORT" | grep -E "a real shift|chip:|logged under date|plan untouched|ERRORS"
 

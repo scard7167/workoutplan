@@ -457,11 +457,15 @@ function sessionLifts() {
   let list = src.map(([ex, sets]) => {
     const x = per[ex];
     const top = x ? x.series[x.series.length - 1].top : null;
+    const lib = libOf(ex);
     return {
       ex, name: disp(ex), muscle: primeOf(ex), planSets: sets,
       sets: sets + (L.extra[ex] || 0),
       top: top ? `${top.w} × ${top.reps}` : null,
       done: (L.logged[ex] || []).length,
+      // A lift with no increment cannot be prescribed for or logged. Say so on the ROW:
+      // finding out only after tapping it, mid-session, is finding out too late.
+      needs: !lib || lib.increment == null,
     };
   });
   // Anything already logged today that this day's plan does not contain still shows,
@@ -558,7 +562,8 @@ function renderSession() {
         <button class="step" data-act="move" data-ex="${esc(l.ex)}" data-dir="1" ${i === lifts.length - 1 ? "disabled" : ""} aria-label="move down"><span>▼</span></button>
       </span>` : `<span class="rt">
         <span class="n">${l.done}/${l.sets}</span>
-        <span class="st${extra > 0 ? " extra" : ""}">${extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
+        <span class="st${extra > 0 ? " extra" : ""}${l.needs ? " needs" : ""}">${
+          l.needs ? "needs setup" : extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
       </span>`}
     </div>`;
   }).join("");
@@ -932,7 +937,8 @@ function renderPlan() {
     const prov = !EXERCISES[ex];
     const needs = prov && (state.custom[ex] || {}).increment == null;
     return `<div class="planrow">
-      <span class="mid"><span class="nm">${esc(disp(ex))}${prov ? ` <span class="tag">${needs ? "needs setup" : "new"}</span>` : ""}</span>
+      <span class="mid"><span class="nm">${esc(disp(ex))}</span>
+        ${prov ? `<span class="tag${needs ? " warn" : ""}">${needs ? "needs setup" : "new"}</span>` : ""}
         <span class="sub${live ? " live" : ""}">${esc(disp(primeOf(ex) || "custom"))}${live ? " · drives today" : ""}</span></span>
       <button class="step" data-act="sets" data-i="${i}" data-d="-1" aria-label="one set fewer"><span>−</span></button>
       <span class="v">${s}</span>
