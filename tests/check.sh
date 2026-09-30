@@ -36,6 +36,18 @@ node tests/long_horizon.mjs "$PORT" | grep -E "seeded|header:|History:|show-more
 echo "--- the app proposes no load: free entry, last session shown as reference ---"
 node tests/free_entry.mjs "$PORT"
 
+echo "--- an emptier document can never overwrite a fuller one ---"
+rm -rf /tmp/slowboot && cp -r web /tmp/slowboot
+python3 - <<'PYEOF'
+s=open('/tmp/slowboot/app.js').read()
+s=s.replace("async function boot() {","async function boot() {\n  await new Promise(r=>setTimeout(r,1500));",1)
+open('/tmp/slowboot/app.js','w').write(s)
+PYEOF
+(cd /tmp/slowboot && python3 -m http.server 8399 >/dev/null 2>&1 & echo $! > /tmp/slow_srv.pid)
+sleep 2
+node tests/no_empty_write.mjs 8399 | grep -E "before reload|after  reload|PASS|FAIL"
+kill "$(cat /tmp/slow_srv.pid)" 2>/dev/null || true
+
 echo "--- a session logged but never finished survives the next day ---"
 node tests/unfinished_session.mjs "$PORT" | grep -E "kicker|banner|History  |storage"
 

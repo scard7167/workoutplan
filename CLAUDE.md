@@ -357,6 +357,7 @@ branch.
 | `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
 | `tests/free_entry.mjs` | the app proposes no load: empty box, last session shown as reference |
 | `tests/unfinished_session.mjs` | a session logged but never finished survives the next day and lands on its own date |
+| `tests/no_empty_write.mjs` | a pre-hydrate write cannot empty the log - the loss that actually happened |
 
 ### Where a logged session lives
 
@@ -398,6 +399,18 @@ Three layers, and conflating them loses data:
 - **One render entry point: `renderAll()`.** Every mutation goes through `setState()`,
   which persists and re-renders everything. Two tabs reading one state at different
   moments is how Plan and Today came to disagree in the previous app.
+- **An emptier document may NEVER overwrite a fuller one.** `persist()` refuses to write
+  when the stored copy has sessions and the one being written has none, and re-hydrates
+  from storage instead; `force: true` is the only way past it, used by the deliberate
+  discards. Nothing is written at all before boot has hydrated (`booted`), and boot now
+  READS THE LOG FIRST - `askPersist()` is slow on a phone and nothing depends on its
+  answer, so it no longer sits in front of the read.
+  This is the last step of every way this app has lost data, which is why the guard lives
+  here rather than at each cause. The one that actually bit: `addEventListener("online",
+  () => persist())` - a network-state change, constant on a phone in a gym - firing
+  before hydrate and writing `sessions: {}` over the real log in BOTH stores. Proven with
+  a slowed boot: without the guard `["2026-09-29"]` becomes `[]`.
+  Asserted by `tests/no_empty_write.mjs`.
 - **A live session is NEVER dropped by a load, whatever its date.** `hydrate()` restored
   `live` only when `doc.live.date === today()`, so sets logged and not Finished were
   silently discarded the next morning - and the empty replacement was then persisted over

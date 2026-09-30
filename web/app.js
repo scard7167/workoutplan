@@ -205,8 +205,29 @@ function snapshot() {
   };
 }
 
-function persist(push = true) {
+let booted = false;
+
+// Refuse to write a document that has LESS in it than the one already stored, unless the
+// user asked for that (a discard). Every way data has been lost here ends in the same
+// last step: something writes an emptier document over a fuller one. This is the step,
+// so this is where it is stopped - whatever the cause upstream.
+function wouldDestroy(doc) {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(LS) || "null"); } catch { return false; }
+  if (!stored) return false;
+  const n = (d) => Object.keys((d && d.sessions) || {}).length;
+  return n(stored) > 0 && n(doc) === 0;
+}
+
+function persist(push = true, force = false) {
   const doc = snapshot();
+  if (!booted && !force) return;              // nothing is written before the log is read
+  if (!force && wouldDestroy(doc)) {
+    // Do not write. Recover instead: the stored copy is the real one.
+    console.warn("strengthlog: refused a write that would have emptied the log");
+    readLocalBest().then((d) => { if (d) { hydrate(d); renderAll(); } });
+    return;
+  }
   let localOk = false;
   try { localStorage.setItem(LS, JSON.stringify(doc)); localOk = true; } catch { /* private mode, quota */ }
   // Deliberately not awaited: a set must never wait on a write. A failure here is
@@ -1289,7 +1310,7 @@ function liftHtml() {
 
 function setState(patch, opts = {}) {
   Object.assign(state, patch);
-  if (opts.persist !== false) persist();
+  if (opts.persist !== false) persist(true, opts.force === true);
   renderAll();
 }
 
@@ -1528,7 +1549,7 @@ document.addEventListener("click", (e) => {
       if (!state.armStale) { setState({ armStale: true }, { persist: false }); break; }
       state.armStale = false;
       state.live = null;
-      setState({});
+      setState({}, { force: true });
       break;
     }
     case "go-cardio": setState({ tab: "Cardio", cWhen: "visit" }, { persist: false }); break;
@@ -1684,9 +1705,14 @@ function hydrate(doc) {
 }
 
 async function boot() {
+  // The log is read FIRST. askPersist() can be slow on a phone and nothing depends on
+  // its answer, so it no longer sits in front of the read.
+  const local0 = await readLocalBest();
+  hydrate(local0);
+  booted = true;
+  renderAll();
   await askPersist();
-  const local = await readLocalBest();
-  hydrate(local);
+  const local = local0;
   state.day = weekdayOf(today());
   renderAll();
   const remote = await store.pull();
