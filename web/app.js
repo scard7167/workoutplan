@@ -14,6 +14,13 @@ import { EXERCISES, PLANS, ACTIVE_PLAN, SEED_LOG, PROGRESSION, BUILD } from "./d
 /* ------------------------------------------------------------------ constants */
 
 const BW_KG = 78;                    // handoff: bodyweight lifts carry 78 kg. A setting one day.
+// A lift the app invents used to be inert until a real increment reached exercises.yaml,
+// because a guessed increment is silent and permanent. On 2026-09-30 the user set 5 kg as
+// the standing assumption for every new lift, having been shown that cost. So a new lift
+// is loggable immediately - but the assumption is LABELLED wherever the lift appears and
+// exported as ASSUMED, so it stays correctable rather than hardening into fact.
+const DEFAULT_INCREMENT = 5;
+const DEFAULT_REP_RANGE = [8, 12];
 const CARDIO_GOAL = 3;               // sessions a week, Mon-Sun
 const NOISE = 2.5;                   // % - anything inside this is "flat", never up or down
 const MIN_N = 4;                     // sessions in the window before a lift is rated
@@ -91,7 +98,19 @@ const disp = (ex) => ex.replace(/_/g, " ");
 const primeOf = (ex) => (EXERCISES[ex] ? EXERCISES[ex].muscles[0] : (state.custom[ex] || {}).muscle || null);
 const groupOf = (ex) => TO_GROUP[primeOf(ex)] || null;
 const isBW = (ex) => !!(EXERCISES[ex] && EXERCISES[ex].bodyweight);
-const libOf = (ex) => EXERCISES[ex] || state.custom[ex] || null;
+function libOf(ex) {
+  if (EXERCISES[ex]) return EXERCISES[ex];
+  const c = state.custom[ex];
+  if (!c) return null;
+  // Applied at READ time, not written into state: a lift created before the default
+  // existed gets it too, and a real value pasted into exercises.yaml always wins.
+  return {
+    ...c,
+    increment: c.increment == null ? DEFAULT_INCREMENT : c.increment,
+    rep_range: c.rep_range || DEFAULT_REP_RANGE,
+    assumed: c.increment == null,
+  };
+}
 const initials = (ex) => disp(ex).split(" ").map((w) => w[0]).slice(0, 2).join("");
 
 const sgn = (v) => (v > 0 ? "+" : v < 0 ? "−" : "±");
@@ -406,7 +425,7 @@ function kpiView() {
 // log.csv would otherwise open every lift at 0 kg and log zeros.
 function prescribe(ex) {
   const lib = libOf(ex);
-  if (!lib || lib.increment == null) return { needs: true, w: null, r: 8 };
+  if (!lib) return { needs: true, w: null, r: 8 };
   const [floor, ceil] = lib.rep_range;
   const inc = lib.increment;
   const hist = allSets().filter((s) => s.ex === ex);
@@ -463,9 +482,10 @@ function sessionLifts() {
       sets: sets + (L.extra[ex] || 0),
       top: top ? `${top.w} × ${top.reps}` : null,
       done: (L.logged[ex] || []).length,
-      // A lift with no increment cannot be prescribed for or logged. Say so on the ROW:
-      // finding out only after tapping it, mid-session, is finding out too late.
-      needs: !lib || lib.increment == null,
+      // Not blocked any more - 5 kg is the standing default - but an ASSUMED increment
+      // is still said out loud on the row, because a silent one is the whole risk.
+      needs: !lib,
+      assumed: !!(lib && lib.assumed),
     };
   });
   // Anything already logged today that this day's plan does not contain still shows,
@@ -562,8 +582,9 @@ function renderSession() {
         <button class="step" data-act="move" data-ex="${esc(l.ex)}" data-dir="1" ${i === lifts.length - 1 ? "disabled" : ""} aria-label="move down"><span>▼</span></button>
       </span>` : `<span class="rt">
         <span class="n">${l.done}/${l.sets}</span>
-        <span class="st${extra > 0 ? " extra" : ""}${l.needs ? " needs" : ""}">${
-          l.needs ? "needs setup" : extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
+        <span class="st${extra > 0 ? " extra" : ""}${l.needs || l.assumed ? " needs" : ""}">${
+          l.needs ? "needs setup" : l.assumed ? "5 kg assumed"
+            : extra > 0 ? `+${extra} vs plan` : full ? "done" : "tap to log"}</span>
       </span>`}
     </div>`;
   }).join("");
@@ -935,10 +956,10 @@ function renderPlan() {
   const armed = (i) => state.armedDrop === `${state.day}:${i}`;
   const rows = dayLifts.map(([ex, s], i) => {
     const prov = !EXERCISES[ex];
-    const needs = prov && (state.custom[ex] || {}).increment == null;
+    const needs = prov && (libOf(ex) || {}).assumed;
     return `<div class="planrow">
       <span class="mid"><span class="nm">${esc(disp(ex))}</span>
-        ${prov ? `<span class="tag${needs ? " warn" : ""}">${needs ? "needs setup" : "new"}</span>` : ""}
+        ${prov ? `<span class="tag${needs ? " warn" : ""}">${needs ? "5 kg assumed" : "new"}</span>` : ""}
         <span class="sub${live ? " live" : ""}">${esc(disp(primeOf(ex) || "custom"))}${live ? " · drives today" : ""}</span></span>
       <button class="step" data-act="sets" data-i="${i}" data-d="-1" aria-label="one set fewer"><span>−</span></button>
       <span class="v">${s}</span>
@@ -1069,7 +1090,7 @@ function renderOverlay() {
 // never move again. This says so at the moment of logging rather than letting the user
 // discover it over a month of unchanged loads.
 function rirWarning(ex, lib) {
-  if (!lib || lib.increment == null || state.rir != null) return "";
+  if (!lib || state.rir != null) return "";
   const ceil = lib.rep_range[1];
   if (state.r < ceil) return "";
   return `<div class="banner"><span class="tag">holds</span><div>
@@ -1083,7 +1104,7 @@ function sheetHtml() {
   const lift = sessionLifts().find((l) => l.ex === ex) || { sets: 3, top: null };
   const done = L.logged[ex] || [];
   const lib = libOf(ex);
-  const needs = !lib || lib.increment == null;
+  const needs = !lib;
   const p = prescribe(ex);
   return `<div class="sheet" role="dialog" aria-modal="true">
     <span class="handle"></span>
@@ -1092,9 +1113,13 @@ function sheetHtml() {
         <div class="sub">${esc(disp(primeOf(ex) || "custom"))} · target ${plural(lift.sets, "set")} · last ${lift.top ? esc(lift.top) : "—"}</div></div>
       <button class="closebtn" data-act="close-ov">Close</button>
     </div>
-    ${needs ? `<div class="banner"><span class="tag">needs setup</span><div>
-      <b>No increment for this lift.</b> Loads are never guessed - set its increment and
-      rep range in <code>exercises.yaml</code> before logging it.</div></div>` : `
+    ${needs ? `<div class="banner"><span class="tag">unknown lift</span><div>
+      <b>This lift is not in the library.</b> Add it on the Plan tab before logging it.
+      </div></div>` : `
+    ${lib.assumed ? `<div class="banner"><span class="tag">assumed</span><div>
+      <b>Stepping this lift in 5 kg.</b> That is the standing default for a lift you
+      added, not a value read off the machine. If the stack moves in 2.5, tell Claude and
+      it goes in <code>exercises.yaml</code> properly.</div></div>` : ""}
     <div class="grid2">
       <div class="stepper"><span class="label">Weight · kg</span><div class="row">
         <button class="step" data-act="w" data-d="-2.5" aria-label="less"><span>−</span></button>
@@ -1219,9 +1244,10 @@ function libHtml() {
       : q ? `<p class="meta">No lift in your library or plans matches.</p>` : ""}
     ${q && !exact ? `<div class="card">
       <span class="label">New lift</span>
-      <p class="body" style="margin:0">A lift the app invents is <b>provisional</b>: it can be
-        planned, but it cannot be prescribed for or logged until its prime mover, rep range and
-        increment are set. The increment is never guessed - read it off the machine.</p>
+      <p class="body" style="margin:0">A lift the app invents gets a <b>5 kg increment and
+        an 8-12 rep range</b> so you can log it straight away. Both are assumptions, labelled
+        as such until real values reach <code>exercises.yaml</code> - tell Claude the real
+        step and it becomes permanent.</p>
       <div class="pills">${MUSCLE_PILLS.map((m) =>
         `<button class="pill" data-act="new-muscle" data-v="${m}" aria-pressed="${state.newMuscle === m}">${esc(disp(m))}</button>`).join("")}</div>
       <button class="btn primary" data-act="create-lift">Add “${esc(state.query.trim())}” as a new lift</button>
@@ -1395,7 +1421,7 @@ function saveRename() {
 function logSet() {
   const ex = state.sheet, L = ensureLive();
   const lib = libOf(ex);
-  if (!lib || lib.increment == null || state.w == null) return;
+  if (!lib || state.w == null) return;
   const logged = { ...L.logged };
   logged[ex] = (logged[ex] || []).concat([{ w: state.w, r: state.r, rir: state.rir }]);
   L.logged = logged;
@@ -1509,9 +1535,13 @@ function exportYaml() {
   out.push("schedule:", `  - plan: ${state.sessionPlanKey}`, `    from: ${today()}`);
   const provisional = Object.keys(state.custom);
   const head = provisional.length
-    ? `# Provisional lifts still need an exercises.yaml entry before this loads:\n` +
-      provisional.map((n) => `#   ${n}: {muscles: [${(state.custom[n] || {}).muscle}], increment: ?, rep_range: [8, 12]}\n`).join("") +
-      "# The increment is never guessed. Read it off the machine.\n\n"
+    ? "# These lifts are not in exercises.yaml yet. Paste them in first.\n" +
+      "# increment 5 is ASSUMED, not read off the machine - correct any that differ.\n" +
+      provisional.map((n) => {
+        const c = libOf(n) || {};
+        return `#   ${n}: {muscles: [${c.muscle}], increment: ${c.increment}` +
+          `${c.assumed ? "   # ASSUMED" : ""}, rep_range: [${(c.rep_range || DEFAULT_REP_RANGE).join(", ")}]}\n`;
+      }).join("") + "\n"
     : "";
   const el = $("yamlout");
   el.textContent = head + out.join("\n") +
@@ -1603,7 +1633,7 @@ document.addEventListener("click", (e) => {
     case "create-lift": {
       const name = state.query.trim().toLowerCase().replace(/\s+/g, "_");
       if (!name) break;
-      const custom = { ...state.custom, [name]: { muscle: state.newMuscle, muscles: [state.newMuscle], increment: null, rep_range: [8, 12] } };
+      const custom = { ...state.custom, [name]: { muscle: state.newMuscle, muscles: [state.newMuscle], increment: null, rep_range: DEFAULT_REP_RANGE } };
       state.custom = custom;
       editPlan((w) => { w[state.day] = (w[state.day] || []).concat([[name, 3]]); });
       setState({ libOn: false, query: "" });

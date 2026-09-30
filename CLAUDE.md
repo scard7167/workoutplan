@@ -346,7 +346,8 @@ branch.
 | `tests/durability.mjs` | the IndexedDB mirror, recovery from a wiped `localStorage`, and the clipboard rows |
 | `tests/day_swap.mjs` | running another day's session today: lifts change, date does not, plan untouched |
 | `tests/long_horizon.mjs` | two years of sessions: nothing pruned, every one still readable, 510 KB |
-| `tests/needs_setup.mjs` | a lift with no increment says so on the row, and the tag survives a long name |
+| `tests/needs_setup.mjs` | an invented lift is loggable on the 5 kg default, and labelled as assumed |
+| `tests/default_increment.mjs` | the 5 kg default across every branch of the progression rule |
 
 ### Where a logged session lives
 
@@ -468,6 +469,41 @@ Fixing it means choosing a plausible start load for 16 machines. Those are demo 
 and not prescriptions, so the "never guess an increment" rule does not bite - but they
 are still invented, so ask before adding them rather than filling the table in quietly.
 
+## The 5 kg increment default - 2026-09-30
+
+A lift the app invents used to be inert: no `increment`, so no prescription and no
+logging until a real value reached `exercises.yaml`. That is what "never guess an
+increment" bought, and the cost showed up at 05:06 in a gym, four lifts into a session,
+with nothing loggable. The user then set the rule: **assume 5 kg for every exercise
+added in future** - having been told the consequence in the same breath.
+
+The consequence, so it is not lost: 5 kg is wrong on any stack that moves in 2.5, and a
+wrong increment is silent. The rule will step that machine twice as fast as it should
+and nothing will flag it; it shows up only as loads that feel wrong. That is now an
+accepted, recorded trade, not an oversight.
+
+So `DEFAULT_INCREMENT = 5` and `DEFAULT_REP_RANGE = [8, 12]` in `web/app.js`, applied in
+`libOf()` at READ time rather than written into state - a lift created before the default
+existed gets it too, and a real value in `exercises.yaml` always wins.
+
+**The assumption is labelled everywhere the lift appears**, which is what keeps it
+correctable instead of hardening into fact:
+
+- Session row: `5 kg assumed` where a library lift says `tap to log`
+- Plan row: a `5 kg assumed` tag, beside the name so truncation cannot eat it
+- Log sheet: a banner saying it is the default, not a value read off the machine
+- `Export routine.yaml`: the stub carries `increment: 5   # ASSUMED`
+
+An unknown lift - one not in the library and not in `state.custom` - is still refused
+outright; `needs` now means that, not a missing increment.
+
+Verified across every branch of the rule with a 5 kg increment: ceiling at RIR 1 goes
+35 -> 40, hold goes 35 x 10 -> 35 x 11, below floor at RIR 0 goes 35 -> 30.
+
+**The debt this joins.** 21 gym80 machines already carry `increment: 5   # UNVERIFIED`
+in `exercises.yaml`. Those are written into the repo, so they read as claims that someone
+checked. They were not. Offer to correct them whenever a real plate reading turns up.
+
 ## Cardio - recorded, not yet trusted
 
 The schema, the library entries (`treadmill`, `bike`, `elliptical`, `outdoor_run`, all
@@ -515,8 +551,14 @@ now quads are trained directly.
 - Never add an exercise to `exercises.yaml`, or remove a muscle's only routine lift,
   without asking first. A provisional lift in the web app is not an exception - it is
   what asking looks like when there is no repo to hand.
-- Never guess an `increment`. Not in the library, not in a photo scan, not to unblock an
-  export. Read it off the machine or leave it blank.
+- **`increment` has a standing default of 5 kg, set by the user on 2026-09-30** - see
+  "The 5 kg increment default" below. It replaces the old absolute ("never guess an
+  increment; read it off the machine or leave it blank"), which blocked logging.
+  What survives unchanged: an assumed increment is **never silent**. It is labelled on
+  the Session row, on the Plan row and in the log sheet, and exported as `# ASSUMED`.
+  Still never invent a REP RANGE floor or a prime mover for a lift someone has to trust,
+  and never guess an increment in `exercises.yaml` itself - a value written to the repo
+  is a claim it was read.
 - If a metric is not built, **say so**. Never compute it ad hoc from the CSV - and if a
   new metric is added, it goes in `analyze.py` first, never only in `web/app.js`.
   Since the handoff override the web app recomputes its OWN metrics from the set log by

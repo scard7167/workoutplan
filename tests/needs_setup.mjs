@@ -1,7 +1,6 @@
-// A lift the app invented has no increment, so it cannot be prescribed for or logged.
-// This asserts the app says so EARLY: on the Session row before you tap it, and on the
-// Plan row where the tag must survive a name long enough to be truncated. Reported after
-// tapping a lift mid-session and only then being told.
+// A lift the app invents is loggable immediately on the 5 kg default, and the assumption
+// is LABELLED - Session row, Plan tag (beside the name, which truncates), and a banner in
+// the sheet. Reported as being told "needs setup" only after tapping a lift mid-session.
 //
 //   (cd web && python3 -m http.server 8080 &) && PW_ROOT=/tmp/pw node tests/needs_setup.mjs 8080
 import { createRequire } from 'node:module';
@@ -39,5 +38,23 @@ for(const r of await p.$$eval('#p-Plan .planrow',ns=>ns.map(e=>{
   const clipped=nm.scrollWidth>nm.clientWidth+1;
   return `${nm.textContent.trim().padEnd(32)} tag=${tag?tag.textContent.trim():'none'}${clipped?'  (name truncated)':''}`;}))) console.log('   ',r);
 
+// the whole point of the change: an invented lift must now be loggable
+await p.click('nav button[data-tab="Session"]');await p.waitForTimeout(300);
+const rows=await p.$$('#p-Session .liftrow');
+await rows[4].click();await p.waitForTimeout(400);
+console.log('SHEET for an invented lift:');
+console.log('   banner:', await p.$eval('.sheet .banner',e=>e.innerText.split(String.fromCharCode(10)).join(' ')).catch(()=>'none'));
+console.log('   weight box disabled:', await p.$eval('#s-w',e=>e.disabled).catch(()=>'MISSING'));
+console.log('   log button:', await p.$eval('[data-act="log-set"]',e=>({t:e.textContent.trim(),d:e.disabled})).then(JSON.stringify));
+await p.fill('#s-w','35');await p.waitForTimeout(150);
+await p.click('[data-act="rir"][data-v="2"]');await p.waitForTimeout(150);
+await p.click('[data-act="log-set"]');await p.waitForTimeout(250);
+console.log('   after logging, set list:', await p.$eval('.setlist .v',e=>e.textContent).catch(()=>'NOT LOGGED'));
+await p.keyboard.press('Escape');await p.waitForTimeout(200);
+await p.click('[data-act="finish"]');await p.waitForTimeout(400);
+await p.click('[data-act="close-summary"]');await p.waitForTimeout(300);
+await p.click('nav button[data-tab="Session"]');await p.waitForTimeout(300);
+await rows[4].click().catch(()=>{});await p.waitForTimeout(400);
+console.log('   next prescription:', await p.$eval('#s-w',e=>e.value).catch(()=>'?'), 'x', await p.$eval('#s-r',e=>e.value).catch(()=>'?'));
 console.log(errs.length?'ERRORS '+errs.join('|'):'no page errors');
 await b.close();
