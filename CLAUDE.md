@@ -358,6 +358,7 @@ branch.
 | `tests/free_entry.mjs` | the app proposes no load: empty box, last session shown as reference |
 | `tests/unfinished_session.mjs` | a session logged but never finished survives the next day and lands on its own date |
 | `tests/no_empty_write.mjs` | a pre-hydrate write cannot empty the log - the loss that actually happened |
+| `tests/shrink_guard.mjs` | no write may SHRINK the log, and the two legitimate shrinks still pass |
 
 ### Where a logged session lives
 
@@ -399,10 +400,12 @@ Three layers, and conflating them loses data:
 - **One render entry point: `renderAll()`.** Every mutation goes through `setState()`,
   which persists and re-renders everything. Two tabs reading one state at different
   moments is how Plan and Today came to disagree in the previous app.
-- **An emptier document may NEVER overwrite a fuller one.** `persist()` refuses to write
-  when the stored copy has sessions and the one being written has none, and re-hydrates
-  from storage instead; `force: true` is the only way past it, used by the deliberate
-  discards. Nothing is written at all before boot has hydrated (`booted`), and boot now
+- **A SHRINKING document may NEVER overwrite a fuller one.** `persist()` takes a
+  `census()` of the stored copy and of the one about to be written - `{days, sets,
+  cardio}`, the three counts that only ever grow by themselves - and refuses the write if
+  ANY of the three has gone down, re-hydrating from storage instead. `force: true` is the
+  only way past it, used by the deliberate shrinks: the stale-session discard and the
+  cardio undo. Nothing is written at all before boot has hydrated (`booted`), and boot
   READS THE LOG FIRST - `askPersist()` is slow on a phone and nothing depends on its
   answer, so it no longer sits in front of the read.
   This is the last step of every way this app has lost data, which is why the guard lives
@@ -410,7 +413,16 @@ Three layers, and conflating them loses data:
   () => persist())` - a network-state change, constant on a phone in a gym - firing
   before hydrate and writing `sessions: {}` over the real log in BOTH stores. Proven with
   a slowed boot: without the guard `["2026-09-29"]` becomes `[]`.
-  Asserted by `tests/no_empty_write.mjs`.
+  **The guard was too narrow when first written**, and only a re-read caught it: it
+  compared session COUNT against zero, so a total wipe was refused but 12 sessions
+  becoming 1, or a session's 24 sets becoming 2, went through - and a partial loss is
+  harder to notice than a complete one. Measured against the narrow version: a tab whose
+  in-memory state is smaller than what is stored wrote `{days:3, sets:12}` back down to
+  `{days:1, sets:4}`. The refusal also logs both censuses to the console, because a guard
+  that silently hides a real bug upstream is its own problem.
+  Asserted by `tests/no_empty_write.mjs` (the pre-hydrate wipe) and
+  `tests/shrink_guard.mjs` (a partial loss refused, AND the two legitimate shrinks still
+  allowed - a guard this blunt can fail in both directions).
 - **A live session is NEVER dropped by a load, whatever its date.** `hydrate()` restored
   `live` only when `doc.live.date === today()`, so sets logged and not Finished were
   silently discarded the next morning - and the empty replacement was then persisted over

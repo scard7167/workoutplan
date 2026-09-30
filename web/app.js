@@ -211,20 +211,38 @@ let booted = false;
 // user asked for that (a discard). Every way data has been lost here ends in the same
 // last step: something writes an emptier document over a fuller one. This is the step,
 // so this is where it is stopped - whatever the cause upstream.
+// What a document holds, in the three counts that only ever grow by themselves.
+function census(d) {
+  const sessions = (d && d.sessions) || {};
+  let sets = 0;
+  for (const s of Object.values(sessions)) {
+    for (const v of Object.values((s && s.lifts) || {})) sets += v.length;
+  }
+  return { days: Object.keys(sessions).length, sets, cardio: ((d && d.cardio) || []).length };
+}
+
+// Refuse ANY shrink, not just a total wipe. The first version only caught sessions going
+// to zero, which would have let 12 sessions become 1, or a session's 24 sets become 2,
+// through untouched - and a partial loss is harder to notice than a complete one.
+// Legitimate shrinks (discarding a stale session, undoing a cardio entry) pass force.
 function wouldDestroy(doc) {
   let stored = null;
   try { stored = JSON.parse(localStorage.getItem(LS) || "null"); } catch { return false; }
   if (!stored) return false;
-  const n = (d) => Object.keys((d && d.sessions) || {}).length;
-  return n(stored) > 0 && n(doc) === 0;
+  const a = census(stored), b = census(doc);
+  return b.days < a.days || b.sets < a.sets || b.cardio < a.cardio;
 }
 
 function persist(push = true, force = false) {
   const doc = snapshot();
   if (!booted && !force) return;              // nothing is written before the log is read
   if (!force && wouldDestroy(doc)) {
-    // Do not write. Recover instead: the stored copy is the real one.
-    console.warn("strengthlog: refused a write that would have emptied the log");
+    // Do not write. Recover instead: the stored copy is the real one. The counts go to
+    // the console because a guard that silently hides a real bug is its own problem.
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem(LS) || "null"); } catch { /* ignore */ }
+    console.warn("strengthlog: refused a shrinking write",
+      { stored: census(stored), attempted: census(doc) });
     readLocalBest().then((d) => { if (d) { hydrate(d); renderAll(); } });
     return;
   }
@@ -1577,7 +1595,7 @@ document.addEventListener("click", (e) => {
     case "c-min": setState({ cMin: String(Math.max(0, (parseFloat(state.cMin) || 0) + num(t.dataset.d))) }, { persist: false }); break;
     case "c-km": setState({ cKm: String(Math.max(0, +((parseFloat(state.cKm) || 0) + num(t.dataset.d)).toFixed(1))) }, { persist: false }); break;
     case "c-log": logCardio(); break;
-    case "c-undo": setState({ cardio: state.cardio.filter((x) => x.id !== (state.cLast || {}).id), cLast: null }); break;
+    case "c-undo": setState({ cardio: state.cardio.filter((x) => x.id !== (state.cLast || {}).id), cLast: null }, { force: true }); break;
     // progress
     case "win": setState({ win: v }, { persist: false }); break;
     case "kpiview": setState({ kpiView: v }, { persist: false }); break;
