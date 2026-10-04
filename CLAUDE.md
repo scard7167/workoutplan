@@ -359,6 +359,7 @@ branch.
 | `tests/unfinished_session.mjs` | a session logged but never finished survives the next day and lands on its own date |
 | `tests/no_empty_write.mjs` | a pre-hydrate write cannot empty the log - the loss that actually happened |
 | `tests/shrink_guard.mjs` | no write may SHRINK the log, and the two legitimate shrinks still pass |
+| `tests/first_push.mjs` | first load after the store is connected pushes the phone's log up; an empty phone does not |
 
 ### Where a logged session lives
 

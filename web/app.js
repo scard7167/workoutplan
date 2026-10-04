@@ -1742,7 +1742,14 @@ async function boot() {
     renderAll();
     persist(localer);
   } else {
-    renderHeader();
+    // The store answered, and it is EMPTY. That is the first load after a Blob store is
+    // connected: everything already on this phone has never been uploaded. Push it now
+    // rather than waiting for the user to happen to change something - otherwise the
+    // log sits un-backed-up on one device until the next set is logged, which is
+    // exactly the window this store exists to close. Nothing to send: just the header.
+    const c = census(snapshot());
+    if (store.state === "synced" && (c.days || c.sets || c.cardio)) persist(true);
+    else renderHeader();
   }
 }
 

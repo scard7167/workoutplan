@@ -51,6 +51,9 @@ kill "$(cat /tmp/slow_srv.pid)" 2>/dev/null || true
 echo "--- no shrinking write: growth and a real undo pass, a partial loss is refused ---"
 node tests/shrink_guard.mjs "$PORT" | grep -E "after |another copy|PASS|FAIL|ERRORS"
 
+echo "--- first load after the store is connected: an existing log goes up, an empty one does not ---"
+node tests/first_push.mjs "$PORT" | grep -E "phone |PASS|FAIL|ERRORS"
+
 echo "--- a session logged but never finished survives the next day ---"
 node tests/unfinished_session.mjs "$PORT" | grep -E "kicker|banner|History  |storage"
 
