@@ -57,6 +57,9 @@ node tests/first_push.mjs "$PORT" | grep -E "phone |PASS|FAIL|ERRORS"
 echo "--- a session logged but never finished survives the next day ---"
 node tests/unfinished_session.mjs "$PORT" | grep -E "kicker|banner|History  |storage"
 
+echo "--- the day chip parked on another weekday: off-plan work is labelled, not hidden ---"
+node tests/offplan_head.mjs "$PORT" | grep -E "logged today|heading|finish button|PASS|FAIL|ERRORS"
+
 echo "--- running another day's session today ---"
 node tests/day_swap.mjs "$PORT" | grep -E "a real shift|chip:|logged under date|plan untouched|ERRORS"
 

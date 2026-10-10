@@ -558,11 +558,23 @@ function renderSession() {
   const muscles = uniq(lifts.map((l) => TO_GROUP[l.muscle] || l.muscle).filter(Boolean));
   const planName = (state.plans[L.plan] || {}).name || L.plan;
 
+  // A lift logged today that the day on screen does not plan for is kept visible on
+  // purpose (see sessionLifts), but stacked straight under the plan it reads as one
+  // scrambled day - reported as "it mixed the exercises on several days" while the day
+  // chip was parked on another weekday. So the first such row gets a heading that says
+  // which list it starts. Label only: no row moves, nothing is hidden, and each row
+  // keeps its own "+N vs plan" tag.
+  let headed = false;
   const rows = lifts.map((l, i) => {
     const full = l.done >= l.sets;
     const extra = l.sets - l.planSets;
     const img = (EXERCISES[l.ex] || {}).image;
-    return `<div class="liftrow${full ? " done" : ""}" role="button" tabindex="0" data-act="open-sheet" data-ex="${esc(l.ex)}">
+    let head = "";
+    if (l.offPlan && !headed) {
+      headed = true;
+      head = `<div class="listhead">logged today · not in ${esc(DAY_LABEL[liveDay()])}'s plan</div>`;
+    }
+    return `${head}<div class="liftrow${full ? " done" : ""}" role="button" tabindex="0" data-act="open-sheet" data-ex="${esc(l.ex)}">
       <span class="tile">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : esc(initials(l.ex))}</span>
       <span class="mid">
         <span class="nm">${esc(l.name)}</span>

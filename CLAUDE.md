@@ -360,6 +360,7 @@ branch.
 | `tests/no_empty_write.mjs` | a pre-hydrate write cannot empty the log - the loss that actually happened |
 | `tests/shrink_guard.mjs` | no write may SHRINK the log, and the two legitimate shrinks still pass |
 | `tests/first_push.mjs` | first load after the store is connected pushes the phone's log up; an empty phone does not |
+| `tests/offplan_head.mjs` | with the day chip on another weekday, work logged today is labelled rather than hidden |
 
 ### Where a logged session lives
 
@@ -453,6 +454,18 @@ Three layers, and conflating them loses data:
   both say so when the day is shifted. A lift with sets already logged today that the
   chosen day does not contain still shows, or switching would hide sets about to be
   written. Asserted by `tests/day_swap.mjs`.
+  **Those kept rows need a heading.** Stacked straight under the chosen day's plan they
+  read as one scrambled day - reported from a gym, mid-session, as "I wanted to check the
+  logged plan for an exercise on an earlier day and it mixed the exercises on several
+  days". The data was never mixed and nothing was at risk; the view was. The first
+  off-plan row now carries `logged today · not in <Day>'s plan`. It is a LABEL: no row
+  moves, nothing is hidden, each row keeps its own `+N vs plan` tag, and a manual reorder
+  is left alone. Asserted by `tests/offplan_head.mjs`, which checks the heading AND that
+  every logged lift is still on screen with every set still counted by Finish.
+  The underlying gap is real and NOT yet addressed: the day chip is the only control that
+  looks like a day viewer, and it is not one - it means "run this day's session today".
+  Looking up an earlier day belongs in Progress (lift detail) or History. A read-only day
+  viewer is a product change and has not been asked for.
 - **RIR is recorded, and never defaulted.** It feeds e1RM and the hard-set count, which
   is why it is still captured now the app proposes nothing. It is sticky per lift - one
   tap per exercise, not per set. Never default it to a number the user did not press.
